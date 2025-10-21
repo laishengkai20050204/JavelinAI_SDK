@@ -13,7 +13,10 @@ ai:
 
 spring:
   main:
-    web-application-type: servlet
+    web-application-type: reactive
+  http:
+    codecs:
+      max-in-memory-size: 16MB
 
 springdoc:
   swagger-ui:
