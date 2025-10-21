@@ -4,10 +4,8 @@ import com.example.service.AiService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.MediaType;
-import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -93,9 +91,6 @@ public class AiServiceImpl implements AiService {
             );
         };
 
-        ParameterizedTypeReference<ServerSentEvent<String>> sseType =
-                new ParameterizedTypeReference<ServerSentEvent<String>>() {};
-
         return webClient.post()
                 .uri(path)
                 .accept(MediaType.TEXT_EVENT_STREAM)
@@ -104,11 +99,13 @@ public class AiServiceImpl implements AiService {
                 .onStatus(HttpStatusCode::isError,
                         resp -> resp.createException()
                                 .map(e -> new RuntimeException("HTTP error: " + e.getMessage(), e)))
-                .bodyToFlux(sseType)
+                .bodyToFlux(String.class)
                 .timeout(Duration.ofSeconds(120))
-                .map(ServerSentEvent::data)
-                .filter(Objects::nonNull)
-                .takeWhile(d -> !"[DONE]".equalsIgnoreCase(d.trim()))
+                .flatMap(chunk -> Flux.fromArray(chunk.split("\\r?\\n")))
+                .map(String::trim)
+                .filter(line -> !line.isEmpty())
+                .map(line -> line.startsWith("data:") ? line.substring(5).trim() : line)
+                .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data))
                 .map(this::extractDeltaSafely)
                 .filter(Objects::nonNull);
     }
