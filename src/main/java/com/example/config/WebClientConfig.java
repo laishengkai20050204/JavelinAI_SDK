@@ -1,6 +1,8 @@
 package com.example.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,9 +11,12 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 @Configuration
 public class WebClientConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(WebClientConfig.class);
 
     @Bean
     public WebClient aiWebClient(
@@ -21,20 +26,21 @@ public class WebClientConfig {
     ) {
         WebClient.Builder builder = WebClient.builder().baseUrl(baseUrl);
 
-        // 如果配置了 API Key，则自动添加 Authorization 头
+        // Attach Authorization header when an API key is provided.
         if (StringUtils.hasText(apiKey)) {
             builder.filter((request, next) -> {
                 ClientRequest mutated = ClientRequest.from(request)
-                        .headers(h -> h.set(HttpHeaders.AUTHORIZATION, authScheme + " " + apiKey))
+                        .headers(headers -> headers.set(HttpHeaders.AUTHORIZATION, authScheme + " " + apiKey))
                         .build();
                 return next.exchange(mutated);
             });
         }
 
-        // 可选：简单日志
         builder.filter(ExchangeFilterFunction.ofRequestProcessor(clientRequest -> {
-            System.out.println("[AI-HTTP] " + clientRequest.method() + " " + clientRequest.url());
-            return reactor.core.publisher.Mono.just(clientRequest);
+            if (log.isDebugEnabled()) {
+                log.debug("[AI-HTTP] {} {}", clientRequest.method(), clientRequest.url());
+            }
+            return Mono.just(clientRequest);
         }));
 
         return builder.build();

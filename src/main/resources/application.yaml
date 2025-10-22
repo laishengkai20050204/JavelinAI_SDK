@@ -10,8 +10,8 @@ ai:
   api-key: ${AI_API_KEY:}
   auth-scheme: Bearer
   think:
-    enabled: true               # 开/关
-#    level: medium               # 可选：空则发送 boolean true；非空就原样传（"low"/"medium"/"high"...）
+    enabled: true               # enable optional thinking mode
+#    level: medium               # optional: send low/medium/high when the upstream supports it
 
 spring:
   main:
