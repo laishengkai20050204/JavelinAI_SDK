@@ -27,6 +27,11 @@ public class AiServiceImpl implements AiService {
     private final Compatibility compatibility;
     private final String path;
     private final String model;
+    @Value("${ai.think.enabled:false}")
+    private boolean thinkEnabled;
+
+    @Value("${ai.think.level:}")
+    private String thinkLevel; // 为空表示用 boolean true；非空则按字符串原样传
 
     public AiServiceImpl(
             WebClient aiWebClient,
@@ -56,19 +61,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private Mono<String> chatOnceCore(String userMessage) {
-        Map<String, Object> body = switch (compatibility) {
-            case OLLAMA -> Map.of(
-                    "model", model,
-                    "messages", List.of(Map.of("role", "user", "content", userMessage)),
-                    "stream", true,
-                    "think", true // 或者从配置注入：true/false；gpt-oss 用 "low"/"medium"/"high"
-            );
-            case OPENAI -> Map.of(
-                    "model", model,
-                    "messages", List.of(Map.of("role", "user", "content", userMessage)),
-                    "stream", true
-            );
-        };
+        Map<String, Object> body = buildRequestBody(userMessage, false);
 
         return webClient.post()
                 .uri(path)
@@ -89,13 +82,7 @@ public class AiServiceImpl implements AiService {
     // ========= 流式（SSE/分块）=========
     @Override
     public Flux<String> chatStream(String userMessage) {
-        Map<String, Object> body = switch (compatibility) {
-            case OLLAMA, OPENAI -> Map.of(
-                    "model", model,
-                    "messages", List.of(Map.of("role", "user", "content", userMessage)),
-                    "stream", true
-            );
-        };
+        Map<String, Object> body = buildRequestBody(userMessage, true);
 
         return webClient.post()
                 .uri(path)
@@ -156,6 +143,33 @@ public class AiServiceImpl implements AiService {
             }
         } catch (Exception e) {
             return data; // 有些实现直接推纯文本
+        }
+    }
+
+    private Map<String, Object> buildRequestBody(String userMessage, boolean stream) {
+        var messages = List.of(Map.of("role", "user", "content", userMessage));
+
+        if (compatibility == Compatibility.OLLAMA) {
+            // 用可变 Map 方便按条件放入 think
+            var m = new java.util.HashMap<String, Object>();
+            m.put("model", model);
+            m.put("messages", messages);
+            m.put("stream", stream);
+            if (thinkEnabled) {
+                if (thinkLevel != null && !thinkLevel.isBlank()) {
+                    m.put("think", thinkLevel);   // 适配 gpt-oss: "low"/"medium"/"high"...
+                } else {
+                    m.put("think", true);         // 普通思考开关：true/false
+                }
+            }
+            return m;
+        } else { // OPENAI
+            // OpenAI 不支持原始 CoT；这里不传 think
+            return Map.of(
+                    "model", model,
+                    "messages", messages,
+                    "stream", stream
+            );
         }
     }
 }

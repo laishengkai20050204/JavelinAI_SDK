@@ -7,9 +7,11 @@ ai:
   base-url: http://localhost:11434
   path: /api/chat
   model: qwen3:8b
-
   api-key: ${AI_API_KEY:}
   auth-scheme: Bearer
+  think:
+    enabled: true               # 开/关
+#    level: medium               # 可选：空则发送 boolean true；非空就原样传（"low"/"medium"/"high"...）
 
 spring:
   main:
