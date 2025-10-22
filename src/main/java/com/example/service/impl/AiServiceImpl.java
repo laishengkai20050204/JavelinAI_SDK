@@ -1337,4 +1337,116 @@ public class AiServiceImpl implements AiService {
                 .doOnError(err -> log.error("continueAfterToolsStreamAsync (raw) failed", err));
     }
 
+    @Override
+    public Flux<String> orchestrateChatStream(String userId,
+                                              String conversationId,
+                                              String prompt,
+                                              @Nullable String toolChoice,
+                                              @Nullable Map<String, Object> options) {
+        log.debug("orchestrateChatStream invoked userId={} conversationId={} toolChoice={} promptLen={}",
+                userId, conversationId, toolChoice, prompt != null ? prompt.length() : 0);
+
+        String normalizedChoice = normalizeToolChoice(toolChoice);
+
+        boolean deltaText = getBool(options, "_delta_text", false);
+        boolean mergeFinal = getBool(options, "_merge_final", false);
+        boolean rawStream  = getBool(options, "_raw_stream", !deltaText && !mergeFinal);
+
+        int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+        List<Map<String, Object>> history = limitWindow(
+                memoryService.getHistory(userId, conversationId),
+                historyWindow
+        );
+
+        // 对话骨架（和 v2 非流式一致）
+        List<Map<String, Object>> conversation = new ArrayList<>();
+        conversation.add(msg("system", SYSTEM_PROMPT_CORE));
+        conversation.addAll(history);
+        Map<String, Object> userMsg = msg("user", prompt);
+        conversation.add(userMsg);
+
+        // 先跑决策（非流式），决定是否用工具
+        Mono<ModelDecision> decisionMono = decideToolUse(userId, conversationId, prompt);
+
+        return decisionMono.flatMapMany(decision -> {
+            List<Map<String, Object>> updated = new ArrayList<>(conversation);
+
+            if (decision != null && decision.hasToolCalls()) {
+                // 有工具：执行后把 tool calls + tool results 注入消息
+                try {
+                    List<Map<String, Object>> toolMsgs = runToolsAndBuildMessages(decision, userId, conversationId, prompt);
+                    updated.addAll(toolMsgs);
+                } catch (Exception e) {
+                    log.warn("Tool execution failed during v2 stream; fallback to no tools", e);
+                }
+            } else if ("required".equals(normalizedChoice)) {
+                // 必须至少跑一次：强制 memory 工具
+                ModelDecision forced = buildForcedDecision(userId, conversationId, prompt);
+                try {
+                    List<Map<String, Object>> toolMsgs = runToolsAndBuildMessages(forced, userId, conversationId, prompt);
+                    updated.addAll(toolMsgs);
+                } catch (Exception e) {
+                    log.warn("Forced tool execution failed during v2 stream; fallback to no tools", e);
+                }
+            }
+
+            // 收尾：用现有 continue 的流式方法，把 flags 透传进去
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("model", model);
+            payload.put("messages", updated);
+            payload.put("tool_choice", "none"); // 收尾阶段默认不再触发工具；如需允许，设 "auto"
+            if (deltaText)  payload.put("_delta_text", true);
+            if (mergeFinal) payload.put("_merge_final", true);
+            if (!deltaText && !mergeFinal) payload.put("_raw_stream", rawStream);
+
+            // 为写入记忆做个简单聚合（能聚再写；raw 透传时若无法解析则写空/跳过）
+            StringBuilder finalText = new StringBuilder();
+
+            Flux<String> stream = continueAfterToolsStreamAsync(payload)
+                    .doOnNext(chunk -> {
+                        if (deltaText) {
+                            // 纯文本增量：直接累计
+                            finalText.append(chunk);
+                        } else if (mergeFinal) {
+                            // 末尾会有一帧合并后的完整 JSON，尝试只在末尾解析
+                            try {
+                                JsonNode root = mapper.readTree(chunk);
+                                JsonNode msgNode = root.path("choices").path(0).path("message");
+                                if (!msgNode.isMissingNode() && msgNode.has("content")) {
+                                    String c = msgNode.path("content").asText(null);
+                                    if (c != null) {
+                                        finalText.setLength(0);
+                                        finalText.append(c);
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                                // 非合并帧/中途帧，忽略
+                            }
+                        }
+                    })
+                    .doOnComplete(() -> {
+                        try {
+                            memoryService.appendMessages(userId, conversationId,
+                                    List.of(userMsg, msg("assistant", finalText.toString())));
+                        } catch (Exception e) {
+                            log.warn("Failed to append messages to memory after v2 stream", e);
+                        }
+                    });
+
+            return stream;
+        }).onErrorResume(ex -> {
+            log.error("orchestrateChatStream failed userId={} conversationId={}", userId, conversationId, ex);
+            // 出错时返回一段友好的文本流
+            return Flux.just("抱歉，流式会话发生异常，请稍后重试。");
+        });
+    }
+
+    // 小工具：读取 boolean 开关
+    private static boolean getBool(@Nullable Map<String, Object> map, String key, boolean defVal) {
+        if (map == null || !map.containsKey(key)) return defVal;
+        Object v = map.get(key);
+        return (v instanceof Boolean) ? (Boolean) v : Boolean.parseBoolean(String.valueOf(v));
+    }
+
+
 }

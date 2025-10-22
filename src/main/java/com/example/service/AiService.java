@@ -28,4 +28,10 @@ public interface AiService {
     Flux<String> continueAfterToolsStreamAsync(Map<String, Object> payload);
 
     Mono<String> orchestrateChat(String userId, String conversationId, String prompt, @Nullable String toolChoice);
+
+    Flux<String> orchestrateChatStream(String userId,
+                                       String conversationId,
+                                       String prompt,
+                                       @org.springframework.lang.Nullable String toolChoice,
+                                       @org.springframework.lang.Nullable Map<String, Object> options);
 }

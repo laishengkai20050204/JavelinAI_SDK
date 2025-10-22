@@ -20,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -158,4 +159,35 @@ public class ChatController {
                 .doOnError(err -> log.error("continueAfterToolsStream failed payloadKeys={}",
                         payload != null ? payload.keySet() : "null", err));
     }
+
+    @PostMapping(value = "/v2/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Chat with memory tools (v2, streaming)",
+            description = "One-shot orchestration with optional tools; streams final answer. " +
+                    "Supports _delta_text (human-readable), _merge_final (final merged JSON), _raw_stream (raw JSON frames).")
+    public Flux<String> orchestratedChatStream(@RequestBody Map<String, Object> payload) {
+        String userId = (String) payload.get("userId");
+        String conversationId = (String) payload.get("conversationId");
+        String question = (String) payload.get("q");
+        String toolChoice = (String) payload.get("toolChoice");
+
+        if (userId == null || conversationId == null || question == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId, conversationId and q are required");
+        }
+
+        // 取可选 flags
+        Map<String, Object> options = new HashMap<>();
+        if (payload.containsKey("_delta_text"))  options.put("_delta_text",  payload.get("_delta_text"));
+        if (payload.containsKey("_merge_final")) options.put("_merge_final", payload.get("_merge_final"));
+        if (payload.containsKey("_raw_stream"))  options.put("_raw_stream",  payload.get("_raw_stream"));
+
+        log.debug("Handling /ai/v2/chat/stream userId={} conversationId={} toolChoice={} options={}",
+                userId, conversationId, toolChoice, options);
+
+        return aiService.orchestrateChatStream(userId, conversationId, question, toolChoice, options)
+                .doOnSubscribe(s -> log.debug("Subscribed to v2 chat stream"))
+                .doOnNext(chunk -> log.trace("v2 chat stream chunk length={}", chunk != null ? chunk.length() : 0))
+                .doOnComplete(() -> log.debug("v2 chat stream completed"))
+                .doOnError(err -> log.error("v2 chat stream failed", err));
+    }
+
 }
