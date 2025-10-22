@@ -15,6 +15,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.Map;
 
 @Tag(name = "AI Chat")
 @RestController
@@ -42,4 +43,19 @@ public class ChatController {
         return aiService.chatStream(q)
                 .onErrorResume(e -> Flux.just("ERR: " + e.getMessage()));
     }
+
+    // ChatController.java
+    @PostMapping("/decide")
+    @Operation(summary = "函数调用-让模型决定要不要调用哪些函数（不执行）")
+    public Mono<String> decide(@RequestBody Map<String, Object> payload) {
+        return aiService.decideToolsAsync(payload);
+    }
+
+    @PostMapping("/continue")
+    @Operation(summary = "函数调用-前端执行完工具后继续，让模型给出最终回复")
+    public Mono<String> continueAfterTools(@RequestBody Map<String, Object> payload) {
+        return aiService.continueAfterToolsAsync(payload);
+    }
+
+
 }

@@ -2,10 +2,10 @@ server:
   port: 8080
 
 ai:
-  compatibility: OLLAMA
+  compatibility: OPENAI
 
   base-url: http://localhost:11434
-  path: /api/chat
+  path: /v1/chat/completions
   model: qwen3:8b
   api-key: ${AI_API_KEY:}
   auth-scheme: Bearer

@@ -13,6 +13,7 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -172,4 +173,49 @@ public class AiServiceImpl implements AiService {
             );
         }
     }
+
+
+    @Override
+    public Mono<String> decideToolsAsync(Map<String, Object> payload) {
+        return callChatCompletions(payload, false);
+    }
+
+    @Override
+    public Mono<String> continueAfterToolsAsync(Map<String, Object> payload) {
+        return callChatCompletions(payload, false);
+    }
+
+    /** 统一的调用封装：支持 tools / tool_choice，默认非流式 */
+    private Mono<String> callChatCompletions(Map<String, Object> payload, boolean stream) {
+        // 从前端 payload 取字段；缺省值回退到服务端配置
+        Object reqModel = payload.getOrDefault("model", model);
+        Object messages = payload.get("messages"); // 必填：[{role, content|...}]
+        Object tools = payload.get("tools");       // 可选：[ {type:'function', function:{name, parameters...}} ]
+        Object toolChoice = payload.getOrDefault("tool_choice", "auto"); // 'auto'/'none'/{ name: ... }
+
+        if (messages == null) {
+            return Mono.error(new IllegalArgumentException("messages is required"));
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("model", reqModel);
+        body.put("messages", messages);
+        if (tools != null) body.put("tools", tools);
+        body.put("tool_choice", toolChoice);
+        body.put("stream", stream);
+
+        return webClient.post()
+                .uri(path) // 指向 OpenAI 兼容 /v1/chat/completions
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, resp -> resp.createException()
+                        .map(e -> new RuntimeException("4xx client error: " + e.getMessage(), e)))
+                .onStatus(HttpStatusCode::is5xxServerError, resp -> resp.createException()
+                        .map(e -> new RuntimeException("5xx server error: " + e.getMessage(), e)))
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(60))
+                .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
+                        .filter(t -> !(t instanceof IllegalArgumentException)));
+    }
+
 }
