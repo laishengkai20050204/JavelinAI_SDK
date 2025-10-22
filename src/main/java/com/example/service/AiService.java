@@ -1,5 +1,6 @@
 package com.example.service;
 
+import org.springframework.lang.Nullable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -21,4 +22,6 @@ public interface AiService {
     Mono<String> decideToolsAsync(Map<String, Object> payload);
 
     Mono<String> continueAfterToolsAsync(Map<String, Object> payload);
+
+    Mono<String> orchestrateChat(String userId, String conversationId, String prompt, @Nullable String toolChoice);
 }

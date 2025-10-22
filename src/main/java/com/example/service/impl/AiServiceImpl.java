@@ -2,6 +2,12 @@ package com.example.service.impl;
 
 import com.example.service.AiService;
 import com.example.service.ConversationMemoryService;
+import com.example.service.impl.dto.ModelDecision;
+import com.example.service.impl.dto.PlanAction;
+import com.example.service.impl.dto.ToolCall;
+import com.example.tools.AiToolExecutor;
+import com.example.tools.ToolRegistry;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -9,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -26,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 public class AiServiceImpl implements AiService {
@@ -35,11 +43,17 @@ public class AiServiceImpl implements AiService {
 
     public enum Compatibility { OLLAMA, OPENAI }
 
-    private static final int DEFAULT_MEMORY_WINDOW = 12;
+    private static final int MAX_TOOL_LIMIT = 50;
+    private static final String SYSTEM_PROMPT_CORE = "You are a helpful assistant who writes concise, accurate answers.";
+    private static final String SYSTEM_PROMPT_DECISION = "You decide whether to call the function find_relevant_memory before answering. Only call it when the user references previous context or when recalling history will help.";
+    private static final String SYSTEM_PROMPT_OLLAMA_PLAN = "你是对话编排器。当需要查询历史时，只能输出：\n{\"action\":\"find_relevant_memory\",\"args\":{\"query\":\"...\", \"maxMessages\":12}}\n如果不需要工具，输出：{\"action\":\"final\"}";
+    private static final String SYSTEM_PROMPT_OLLAMA_FINAL = "以上是检索结果和对话，请基于这些内容生成最终回答（只输出答案文本）。";
 
     private final WebClient webClient;
     private final ObjectMapper mapper;
     private final ConversationMemoryService memoryService;
+    private final ToolRegistry toolRegistry;
+    private final AiToolExecutor toolExecutor;
     private final Compatibility compatibility;
     private final String path;
     private final String model;
@@ -50,10 +64,18 @@ public class AiServiceImpl implements AiService {
     @Value("${ai.think.level:}")
     private String thinkLevel; // blank means boolean true; non-blank attempts provided string
 
+    @Value("${ai.tools.max-loops:2}")
+    private int maxToolLoops;
+
+    @Value("${ai.memory.max-messages:12}")
+    private int configuredMemoryWindow;
+
     public AiServiceImpl(
             WebClient aiWebClient,
             ObjectMapper mapper,
             ConversationMemoryService memoryService,
+            ToolRegistry toolRegistry,
+            AiToolExecutor toolExecutor,
             @Value("${ai.compatibility}") String compatibility,
             @Value("${ai.path}") String path,
             @Value("${ai.model}") String model
@@ -61,6 +83,8 @@ public class AiServiceImpl implements AiService {
         this.webClient = aiWebClient;
         this.mapper = mapper;
         this.memoryService = memoryService;
+        this.toolRegistry = toolRegistry;
+        this.toolExecutor = toolExecutor;
         this.compatibility = Compatibility.valueOf(compatibility.toUpperCase());
         this.path = path;
         this.model = model;
@@ -121,18 +145,19 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public Mono<String> chatWithMemoryAsync(String userId, String conversationId, String userMessage) {
+        int window = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
         List<Map<String, Object>> relevant = memoryService.findRelevant(
                 userId,
                 conversationId,
                 userMessage,
-                DEFAULT_MEMORY_WINDOW
+                window
         );
         List<Map<String, Object>> conversation = new ArrayList<>(relevant);
 
         if (conversation.isEmpty()) {
             conversation.addAll(limitWindow(
                     memoryService.getHistory(userId, conversationId),
-                    DEFAULT_MEMORY_WINDOW
+                    window
             ));
         }
 
@@ -150,10 +175,447 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public Mono<List<Map<String, Object>>> findRelevantMemoryAsync(String userId, String conversationId, String query, int limit) {
-        int safeLimit = limit > 0 ? limit : DEFAULT_MEMORY_WINDOW;
+        int safeLimit = limit > 0 ? limit : Math.max(1, configuredMemoryWindow);
         return Mono.fromCallable(() -> new ArrayList<>(
                 memoryService.findRelevant(userId, conversationId, query, safeLimit)
         ));
+    }
+
+    @Override
+    public Mono<String> orchestrateChat(String userId, String conversationId, String prompt, @Nullable String toolChoice) {
+        String normalizedChoice = normalizeToolChoice(toolChoice);
+        int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+
+        List<Map<String, Object>> history = limitWindow(
+                memoryService.getHistory(userId, conversationId),
+                historyWindow
+        );
+        Map<String, Object> userMessage = msg("user", prompt);
+
+        List<Map<String, Object>> conversation = new ArrayList<>();
+        conversation.add(msg("system", SYSTEM_PROMPT_CORE));
+        conversation.addAll(history);
+        conversation.add(userMessage);
+
+        Mono<String> orchestration = orchestrateLoop(
+                userId,
+                conversationId,
+                prompt,
+                normalizedChoice,
+                conversation,
+                0,
+                false,
+                null
+        ).onErrorResume(ex -> {
+            log.warn("Tool orchestration failed, falling back to direct completion", ex);
+            return continueAfterTools(conversation, "none")
+                    .onErrorResume(inner -> {
+                        log.error("Fallback completion failed", inner);
+                        return Mono.just("Sorry, something went wrong.");
+                    });
+        });
+
+        return orchestration.flatMap(answer -> Mono.fromRunnable(() -> memoryService.appendMessages(
+                        userId,
+                        conversationId,
+                        List.of(msg("user", prompt), msg("assistant", answer))
+                ))
+                .thenReturn(answer));
+    }
+
+    private Mono<String> orchestrateLoop(String userId,
+                                         String conversationId,
+                                         String prompt,
+                                         String toolChoice,
+                                         List<Map<String, Object>> currentMessages,
+                                         int loopIndex,
+                                         boolean toolExecuted,
+                                         @Nullable ModelDecision nextDecision) {
+        if ("none".equals(toolChoice)) {
+            log.debug("Tool choice 'none' - skipping tool orchestration");
+            return continueAfterTools(currentMessages, "none");
+        }
+
+        int maxLoops = Math.max(1, maxToolLoops);
+        if (loopIndex >= maxLoops) {
+            log.warn("Reached max tool loops {} - returning without further tools", maxLoops);
+            return continueAfterTools(currentMessages, "none");
+        }
+
+        Mono<ModelDecision> decisionMono = nextDecision != null
+                ? Mono.just(nextDecision)
+                : decideToolUse(userId, conversationId, prompt)
+                .doOnNext(decision -> {
+                    if (decision != null && decision.hasToolCalls()) {
+                        log.info("Model requested {} tool call(s) on loop {}", decision.getToolCalls().size(), loopIndex);
+                    } else {
+                        log.debug("Model skipped tool calls on loop {}", loopIndex);
+                    }
+                });
+
+        return decisionMono.flatMap(decision -> handleDecisionOrContinue(
+                userId,
+                conversationId,
+                prompt,
+                toolChoice,
+                currentMessages,
+                loopIndex,
+                toolExecuted,
+                decision
+        ));
+    }
+
+    private Mono<String> handleDecisionOrContinue(String userId,
+                                                  String conversationId,
+                                                  String prompt,
+                                                  String toolChoice,
+                                                  List<Map<String, Object>> currentMessages,
+                                                  int loopIndex,
+                                                  boolean toolExecuted,
+                                                  @Nullable ModelDecision decision) {
+        if (decision == null || !decision.hasToolCalls()) {
+            if ("required".equals(toolChoice) && !toolExecuted) {
+                log.info("tool_choice=requirement not satisfied - forcing memory lookup");
+                ModelDecision forced = buildForcedDecision(userId, conversationId, prompt);
+                return handleDecision(
+                        userId,
+                        conversationId,
+                        prompt,
+                        toolChoice,
+                        currentMessages,
+                        loopIndex,
+                        true,
+                        forced
+                );
+            }
+            return continueAfterTools(currentMessages, "none");
+        }
+
+        return handleDecision(
+                userId,
+                conversationId,
+                prompt,
+                toolChoice,
+                currentMessages,
+                loopIndex,
+                true,
+                decision
+        );
+    }
+
+    private Mono<String> handleDecision(String userId,
+                                        String conversationId,
+                                        String prompt,
+                                        String toolChoice,
+                                        List<Map<String, Object>> currentMessages,
+                                        int loopIndex,
+                                        boolean toolExecuted,
+                                        ModelDecision decision) {
+        List<Map<String, Object>> toolMessages;
+        try {
+            toolMessages = runToolsAndBuildMessages(decision, userId, conversationId, prompt);
+        } catch (Exception e) {
+            log.warn("Failed to execute tool calls, falling back to direct completion", e);
+            return continueAfterTools(currentMessages, "none");
+        }
+
+        List<Map<String, Object>> updatedMessages = new ArrayList<>(currentMessages);
+        updatedMessages.addAll(toolMessages);
+
+        String downstreamChoice = "none";
+        if ("required".equals(toolChoice) && toolExecuted) {
+            downstreamChoice = "none";
+        } else if ("auto".equals(toolChoice)) {
+            downstreamChoice = "none";
+        }
+
+        return continueAfterTools(updatedMessages, downstreamChoice)
+                .onErrorResume(ToolLoopException.class, loopEx -> {
+                    if (loopIndex + 1 >= Math.max(1, maxToolLoops)) {
+                        log.warn("Continuation requested more tools but max loops reached; returning without running tools again");
+                        return continueAfterTools(updatedMessages, "none");
+                    }
+                    log.info("Continuation requested another tool cycle (loop {}); repeating orchestration", loopIndex + 1);
+                    return orchestrateLoop(
+                            userId,
+                            conversationId,
+                            prompt,
+                            toolChoice,
+                            updatedMessages,
+                            loopIndex + 1,
+                            true,
+                            loopEx.getDecision()
+                    );
+                })
+                .onErrorResume(ex -> {
+                    if (ex instanceof ToolLoopException) {
+                        return Mono.error(ex);
+                    }
+                    log.warn("Continuation failed, falling back to direct completion", ex);
+                    return continueAfterTools(currentMessages, "none");
+                });
+    }
+
+    private ModelDecision buildForcedDecision(String userId, String conversationId, String prompt) {
+        try {
+            if (toolRegistry.get("find_relevant_memory").isEmpty()) {
+                log.warn("Required tool 'find_relevant_memory' not registered; skipping forced decision");
+                return ModelDecision.finalOnly();
+            }
+            Map<String, Object> args = new HashMap<>();
+            args.put("userId", userId);
+            args.put("conversationId", conversationId);
+            args.put("query", prompt);
+            args.put("maxMessages", configuredMemoryWindow > 0 ? configuredMemoryWindow : 12);
+            String argsJson = mapper.writeValueAsString(args);
+            ToolCall call = new ToolCall("forced-" + UUID.randomUUID(), "find_relevant_memory", argsJson);
+            return new ModelDecision(List.of(call), false);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to build forced tool arguments", e);
+            ToolCall call = new ToolCall("forced-" + UUID.randomUUID(), "find_relevant_memory", "{}");
+            return new ModelDecision(List.of(call), false);
+        }
+    }
+
+    private String normalizeToolChoice(@Nullable String toolChoice) {
+        if (toolChoice == null || toolChoice.isBlank()) {
+            return "auto";
+        }
+        String normalized = toolChoice.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("auto", "none", "required").contains(normalized)) {
+            log.warn("Unsupported tool_choice '{}' received - defaulting to auto", toolChoice);
+            return "auto";
+        }
+        return normalized;
+    }
+
+    private Mono<ModelDecision> decideToolUse(String userId, String conversationId, String prompt) {
+        try {
+            int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+            List<Map<String, Object>> history = limitWindow(
+                    memoryService.getHistory(userId, conversationId),
+                    historyWindow
+            );
+
+            List<Map<String, Object>> messages = new ArrayList<>();
+            if (compatibility == Compatibility.OPENAI) {
+                messages.add(msg("system", SYSTEM_PROMPT_DECISION));
+            } else {
+                messages.add(msg("system", SYSTEM_PROMPT_OLLAMA_PLAN));
+            }
+            messages.addAll(history);
+            messages.add(msg("user", prompt));
+
+            if (compatibility == Compatibility.OPENAI) {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("model", model);
+                payload.put("messages", messages);
+                List<Map<String, Object>> schemas = toolRegistry.openAiToolsSchema();
+                if (!schemas.isEmpty()) {
+                    payload.put("tools", schemas);
+                    payload.put("tool_choice", "auto");
+                } else {
+                    payload.put("tool_choice", "none");
+                }
+                payload.put("stream", false);
+
+                return callChatCompletions(payload, false)
+                        .map(this::parseDecision)
+                        .onErrorResume(ex -> {
+                            log.warn("Failed to decide tool usage (OpenAI mode)", ex);
+                            return Mono.just(ModelDecision.finalOnly());
+                        });
+            }
+
+            Map<String, Object> body = buildRequestBody(messages, false);
+            return webClient.post()
+                    .uri(path)
+                    .bodyValue(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError,
+                            response -> mapToResponseStatus(response, "Upstream returned 4xx during tool planning"))
+                    .onStatus(HttpStatusCode::is5xxServerError,
+                            response -> mapToResponseStatus(response, "Upstream returned 5xx during tool planning"))
+                    .bodyToMono(String.class)
+                    .timeout(Duration.ofSeconds(60))
+                    .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
+                            .filter(this::isRetryableError))
+                    .map(this::parseDecision)
+                    .onErrorResume(ex -> {
+                        log.warn("Failed to decide tool usage (Ollama mode)", ex);
+                        return Mono.just(ModelDecision.finalOnly());
+                    });
+        } catch (Exception ex) {
+            log.warn("Exception building tool decision request", ex);
+            return Mono.just(ModelDecision.finalOnly());
+        }
+    }
+
+    private List<Map<String, Object>> runToolsAndBuildMessages(ModelDecision decision,
+                                                               String userId,
+                                                               String conversationId,
+                                                               String prompt) {
+        List<Map<String, Object>> responses = new ArrayList<>();
+        if (decision == null || !decision.hasToolCalls()) {
+            return responses;
+        }
+
+        List<AiToolExecutor.ToolCall> calls = decision.getToolCalls().stream()
+                .map(call -> new AiToolExecutor.ToolCall(call.getId(), call.getName(), call.getArgumentsJson()))
+                .toList();
+
+        if (calls.isEmpty()) {
+            return responses;
+        }
+
+        log.info("Executing {} tool call(s)", calls.size());
+        responses.add(toolExecutor.toAssistantToolCallsMessage(calls));
+
+        int fallbackWindow = configuredMemoryWindow > 0
+                ? Math.min(Math.max(configuredMemoryWindow, 1), MAX_TOOL_LIMIT)
+                : 12;
+
+        Map<String, Object> fallbackArgs = new HashMap<>();
+        fallbackArgs.put("userId", userId);
+        fallbackArgs.put("conversationId", conversationId);
+        fallbackArgs.put("query", prompt);
+        fallbackArgs.put("maxMessages", fallbackWindow);
+
+        try {
+            responses.addAll(toolExecutor.executeAll(calls, fallbackArgs));
+        } catch (IllegalArgumentException iae) {
+            log.warn("Tool execution failed due to bad request: {}", iae.getMessage());
+            throw iae;
+        } catch (Exception ex) {
+            log.warn("Tool execution encountered an error", ex);
+            throw new RuntimeException("Tool execution failed", ex);
+        }
+
+        return responses;
+    }
+
+    private Mono<String> continueAfterTools(List<Map<String, Object>> messages, String toolChoice) {
+        if (compatibility == Compatibility.OPENAI) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("model", model);
+            payload.put("messages", messages);
+            payload.put("tool_choice", toolChoice == null ? "none" : toolChoice);
+            payload.put("stream", false);
+
+            return callChatCompletions(payload, false)
+                    .flatMap(json -> {
+                        ModelDecision followUp = parseDecision(json);
+                        if (followUp != null && followUp.hasToolCalls()) {
+                            log.info("Continuation produced additional tool calls - restarting loop");
+                            return Mono.error(new ToolLoopException(followUp));
+                        }
+                        return Mono.just(extractContentSafely(json));
+                    });
+        }
+
+        List<Map<String, Object>> enriched = new ArrayList<>(messages);
+        enriched.add(msg("system", SYSTEM_PROMPT_OLLAMA_FINAL));
+
+        Map<String, Object> body = buildRequestBody(enriched, false);
+
+        return webClient.post()
+                .uri(path)
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError,
+                        response -> mapToResponseStatus(response, "Upstream returned 4xx during final response"))
+                .onStatus(HttpStatusCode::is5xxServerError,
+                        response -> mapToResponseStatus(response, "Upstream returned 5xx during final response"))
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(60))
+                .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
+                        .filter(this::isRetryableError))
+                .flatMap(json -> {
+                    ModelDecision followUp = parseDecision(json);
+                    if (followUp != null && followUp.hasToolCalls()) {
+                        log.info("Ollama continuation produced a tool plan - restarting loop");
+                        return Mono.error(new ToolLoopException(followUp));
+                    }
+                    return Mono.just(extractContentSafely(json));
+                });
+    }
+
+    private Map<String, Object> msg(String role, String content) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("role", role);
+        map.put("content", content);
+        return map;
+    }
+
+    private @Nullable ModelDecision parseDecision(String json) {
+        if (json == null || json.isBlank()) {
+            return ModelDecision.finalOnly();
+        }
+
+        try {
+            JsonNode root = mapper.readTree(json);
+            if (compatibility == Compatibility.OPENAI) {
+                JsonNode messageNode = root.path("choices").path(0).path("message");
+                if (messageNode.isMissingNode()) {
+                    return ModelDecision.finalOnly();
+                }
+
+                List<ToolCall> calls = new ArrayList<>();
+                JsonNode toolCalls = messageNode.path("tool_calls");
+                if (toolCalls.isArray()) {
+                    for (JsonNode node : toolCalls) {
+                        String id = node.path("id").asText("call-" + UUID.randomUUID());
+                        String name = node.path("function").path("name").asText("");
+                        String arguments = node.path("function").path("arguments").asText("{}");
+                        if (name != null && !name.isBlank()) {
+                            calls.add(new ToolCall(id, name, arguments));
+                        }
+                    }
+                }
+                boolean wantsFinal = messageNode.path("content").asText("").trim().length() > 0;
+                return new ModelDecision(calls, wantsFinal);
+            }
+
+            JsonNode messageNode = root.path("message");
+            String content = messageNode.path("content").asText(root.path("content").asText(""));
+            if (content == null || content.isBlank()) {
+                return ModelDecision.finalOnly();
+            }
+            String trimmed = content.trim();
+            if (!trimmed.startsWith("{")) {
+                return ModelDecision.finalOnly();
+            }
+
+            PlanAction plan = mapper.readValue(trimmed, PlanAction.class);
+            if (plan == null || plan.getAction() == null) {
+                return ModelDecision.finalOnly();
+            }
+
+            String action = plan.getAction();
+            if (action != null) {
+                action = action.trim();
+            }
+            if ("final".equalsIgnoreCase(action)) {
+                return ModelDecision.finalOnly();
+            }
+
+            if (action == null || action.isEmpty()) {
+                return ModelDecision.finalOnly();
+            }
+
+            if (toolRegistry.get(action).isPresent()) {
+                Map<String, Object> args = plan.getArgs() == null ? Map.of() : plan.getArgs();
+                String argsJson = mapper.writeValueAsString(args);
+                ToolCall call = new ToolCall("plan-" + UUID.randomUUID(), action, argsJson);
+                return new ModelDecision(List.of(call), false);
+            }
+
+            log.warn("Unsupported plan action '{}' received from model", action);
+            return ModelDecision.finalOnly();
+        } catch (Exception e) {
+            log.warn("Failed to parse model decision", e);
+            return ModelDecision.finalOnly();
+        }
     }
 
     // ========= JSON parsing =========
@@ -346,5 +808,18 @@ public class AiServiceImpl implements AiService {
                 .timeout(Duration.ofSeconds(60))
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
                         .filter(this::isRetryableError));
+    }
+
+    private static class ToolLoopException extends RuntimeException {
+        private final ModelDecision decision;
+
+        ToolLoopException(ModelDecision decision) {
+            super("Model requested additional tool execution");
+            this.decision = decision;
+        }
+
+        ModelDecision getDecision() {
+            return decision;
+        }
     }
 }

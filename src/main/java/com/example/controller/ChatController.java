@@ -8,12 +8,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -73,5 +75,18 @@ public class ChatController {
     @Operation(summary = "Continue after tools", description = "Send tool results back to the model for a final answer.")
     public Mono<String> continueAfterTools(@RequestBody Map<String, Object> payload) {
         return aiService.continueAfterToolsAsync(payload);
+    }
+
+    @PostMapping("/v2/chat")
+    @Operation(summary = "Chat with memory tools (v2)", description = "Two-phase orchestration with optional tool usage.")
+    public Mono<String> orchestratedChat(@RequestBody Map<String, String> payload) {
+        String userId = payload.get("userId");
+        String conversationId = payload.get("conversationId");
+        String question = payload.get("q");
+        if (userId == null || conversationId == null || question == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId, conversationId and q are required");
+        }
+        String toolChoice = payload.get("toolChoice");
+        return aiService.orchestrateChat(userId, conversationId, question, toolChoice);
     }
 }
