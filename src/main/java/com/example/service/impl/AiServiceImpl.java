@@ -57,10 +57,16 @@ public class AiServiceImpl implements AiService {
 
     private Mono<String> chatOnceCore(String userMessage) {
         Map<String, Object> body = switch (compatibility) {
-            case OLLAMA, OPENAI -> Map.of(
+            case OLLAMA -> Map.of(
                     "model", model,
                     "messages", List.of(Map.of("role", "user", "content", userMessage)),
-                    "stream", false
+                    "stream", true,
+                    "think", true // 或者从配置注入：true/false；gpt-oss 用 "low"/"medium"/"high"
+            );
+            case OPENAI -> Map.of(
+                    "model", model,
+                    "messages", List.of(Map.of("role", "user", "content", userMessage)),
+                    "stream", true
             );
         };
 
@@ -115,25 +121,36 @@ public class AiServiceImpl implements AiService {
         try {
             JsonNode root = mapper.readTree(json);
             return switch (compatibility) {
-                case OLLAMA -> root.path("message").path("content").asText(json);
+                case OLLAMA -> {
+                    String thinking = root.path("message").path("thinking").asText("");
+                    String content  = root.path("message").path("content").asText("");
+                    yield (thinking.isEmpty() ? "" : "【思考】" + thinking + "\n\n")
+                            + (content.isEmpty()  ? json : content);
+                }
                 case OPENAI -> root.path("choices").path(0).path("message").path("content").asText(json);
             };
         } catch (Exception e) {
-            return json; // 解析失败直接回原文，便于排查
+            return json;
         }
     }
 
     private String extractDeltaSafely(String data) {
         try {
             JsonNode root = mapper.readTree(data);
+
             if (compatibility == Compatibility.OPENAI) {
                 JsonNode delta = root.path("choices").path(0).path("delta").path("content");
                 if (!delta.isMissingNode() && !delta.isNull()) return delta.asText();
                 if (root.has("content")) return root.path("content").asText();
                 return null;
-            } else {
-                JsonNode msg = root.path("message").path("content");
-                if (!msg.isMissingNode() && !msg.isNull()) return msg.asText();
+            } else { // OLLAMA
+                JsonNode msg = root.path("message");
+                JsonNode thinking = msg.path("thinking");
+                if (!thinking.isMissingNode() && !thinking.isNull() && !thinking.asText().isEmpty()) {
+                    return "[THINK] " + thinking.asText(); // 前端看到就当“思考链”
+                }
+                JsonNode content = msg.path("content");
+                if (!content.isMissingNode() && !content.isNull()) return content.asText();
                 if (root.has("content")) return root.path("content").asText();
                 return null;
             }

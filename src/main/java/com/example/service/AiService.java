@@ -1,6 +1,8 @@
 package com.example.service;
 
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Service
 // Service 接口
@@ -9,8 +11,8 @@ public interface AiService {
     String chatOnce(String userMessage);
 
     // 异步（非流式）
-    reactor.core.publisher.Mono<String> chatOnceAsync(String userMessage);
+    Mono<String> chatOnceAsync(String userMessage);
 
     // 流式（SSE/分块）
-    reactor.core.publisher.Flux<String> chatStream(String userMessage);
+    Flux<String> chatStream(String userMessage);
 }
