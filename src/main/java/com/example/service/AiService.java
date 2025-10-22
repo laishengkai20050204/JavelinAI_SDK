@@ -21,7 +21,11 @@ public interface AiService {
 
     Mono<String> decideToolsAsync(Map<String, Object> payload);
 
+    Flux<String> decideToolsStreamAsync(Map<String, Object> payload);
+
     Mono<String> continueAfterToolsAsync(Map<String, Object> payload);
+
+    Flux<String> continueAfterToolsStreamAsync(Map<String, Object> payload);
 
     Mono<String> orchestrateChat(String userId, String conversationId, String prompt, @Nullable String toolChoice);
 }

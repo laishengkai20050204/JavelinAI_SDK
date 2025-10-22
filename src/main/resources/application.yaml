@@ -16,6 +16,12 @@ ai:
     max-loops: 2
   memory:
     max-messages: 12
+  client:
+    timeout-ms: 180000           # wait longer for upstream completion calls
+    stream-timeout-ms: 240000    # longer window for streaming responses
+    retry:
+      max-attempts: 3
+      backoff-ms: 500
 
 spring:
   main:
@@ -27,3 +33,7 @@ spring:
 springdoc:
   swagger-ui:
     path: /swagger-ui
+
+logging:
+  level:
+    com.example: DEBUG

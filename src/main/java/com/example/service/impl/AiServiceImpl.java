@@ -10,8 +10,9 @@ import com.example.tools.ToolRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -21,6 +22,8 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
@@ -28,6 +31,7 @@ import reactor.util.retry.Retry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,10 +40,12 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class AiServiceImpl implements AiService {
 
-    private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
     private static final Set<String> SUPPORTED_THINK_LEVELS = Set.of("low", "medium", "high");
+    private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
+            new ParameterizedTypeReference<ServerSentEvent<String>>() {};
 
     public enum Compatibility { OLLAMA, OPENAI }
 
@@ -70,6 +76,18 @@ public class AiServiceImpl implements AiService {
     @Value("${ai.memory.max-messages:12}")
     private int configuredMemoryWindow;
 
+    @Value("${ai.client.timeout-ms:60000}")
+    private long clientTimeoutMs;
+
+    @Value("${ai.client.stream-timeout-ms:120000}")
+    private long clientStreamTimeoutMs;
+
+    @Value("${ai.client.retry.max-attempts:2}")
+    private int clientRetryMaxAttempts;
+
+    @Value("${ai.client.retry.backoff-ms:300}")
+    private long clientRetryBackoffMs;
+
     public AiServiceImpl(
             WebClient aiWebClient,
             ObjectMapper mapper,
@@ -93,14 +111,20 @@ public class AiServiceImpl implements AiService {
     // ========= synchronous =========
     @Override
     public String chatOnce(String userMessage) {
+        log.debug("chatOnce invoked userMessageLength={}", userMessage != null ? userMessage.length() : 0);
         return chatOnceAsync(userMessage).block();
     }
 
     // ========= async (non-streaming) =========
     @Override
     public Mono<String> chatOnceAsync(String userMessage) {
+        log.debug("chatOnceAsync invoked userMessageLength={}", userMessage != null ? userMessage.length() : 0);
         List<Map<String, Object>> messages = buildSingleUserMessage(userMessage);
-        return chatOnceCore(messages).map(this::extractContentSafely);
+        return chatOnceCore(messages)
+                .map(this::extractContentSafely)
+                .doOnSuccess(response -> log.debug("chatOnceAsync completed contentLength={}",
+                        response != null ? response.length() : 0))
+                .doOnError(error -> log.error("chatOnceAsync failed", error));
     }
 
     private Mono<String> chatOnceCore(List<Map<String, Object>> messages) {
@@ -115,14 +139,14 @@ public class AiServiceImpl implements AiService {
                 .onStatus(HttpStatusCode::is5xxServerError,
                         response -> mapToResponseStatus(response, "Upstream returned 5xx during chat"))
                 .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(60))
-                .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
-                        .filter(this::isRetryableError));
+                .timeout(requestTimeout())
+                .retryWhen(retrySpec());
     }
 
     // ========= streaming (SSE/chunked) =========
     @Override
     public Flux<String> chatStream(String userMessage) {
+        log.debug("chatStream invoked userMessageLength={}", userMessage != null ? userMessage.length() : 0);
         Map<String, Object> body = buildRequestBody(buildSingleUserMessage(userMessage), true);
 
         return webClient.post()
@@ -132,19 +156,25 @@ public class AiServiceImpl implements AiService {
                 .retrieve()
                 .onStatus(HttpStatusCode::isError,
                         response -> mapToResponseStatus(response, "Upstream returned an error during stream"))
-                .bodyToFlux(String.class)
-                .timeout(Duration.ofSeconds(120))
-                .flatMap(chunk -> Flux.fromArray(chunk.split("\\r?\\n")))
-                .map(String::trim)
-                .filter(line -> !line.isEmpty())
-                .map(line -> line.startsWith("data:") ? line.substring(5).trim() : line)
+                .bodyToFlux(SSE_TYPE)
+                .timeout(streamTimeout())
+                .doOnNext(event -> log.trace("chatStream SSE event: {}", event))
+                .map(ServerSentEvent::data)
+                .map(this::trimToNull)
+                .filter(text -> text != null && !text.isEmpty())
                 .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data))
                 .map(this::extractDeltaSafely)
-                .filter(Objects::nonNull);
+                .filter(text -> text != null && !text.isEmpty())
+                .doOnSubscribe(subscription -> log.debug("chatStream subscribed"))
+                .doOnNext(chunk -> log.trace("chatStream emitted chunkLength={}", chunk.length()))
+                .doOnComplete(() -> log.debug("chatStream completed"))
+                .doOnError(error -> log.error("chatStream failed", error));
     }
 
     @Override
     public Mono<String> chatWithMemoryAsync(String userId, String conversationId, String userMessage) {
+        log.debug("chatWithMemoryAsync invoked userId={} conversationId={} userMessageLength={}",
+                userId, conversationId, userMessage != null ? userMessage.length() : 0);
         int window = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
         List<Map<String, Object>> relevant = memoryService.findRelevant(
                 userId,
@@ -153,12 +183,16 @@ public class AiServiceImpl implements AiService {
                 window
         );
         List<Map<String, Object>> conversation = new ArrayList<>(relevant);
+        log.debug("chatWithMemoryAsync relevantMessages={} userId={} conversationId={}",
+                relevant.size(), userId, conversationId);
 
         if (conversation.isEmpty()) {
             conversation.addAll(limitWindow(
                     memoryService.getHistory(userId, conversationId),
                     window
             ));
+            log.debug("chatWithMemoryAsync fallbackHistorySize={} userId={} conversationId={}",
+                    conversation.size(), userId, conversationId);
         }
 
         Map<String, Object> userEntry = message("user", userMessage);
@@ -170,20 +204,36 @@ public class AiServiceImpl implements AiService {
                         userId,
                         conversationId,
                         List.of(userEntry, message("assistant", reply))
-                ));
+                ))
+                .doOnSuccess(reply -> log.debug("chatWithMemoryAsync completed userId={} conversationId={} responseLength={}",
+                        userId, conversationId, reply != null ? reply.length() : 0))
+                .doOnError(error -> log.error("chatWithMemoryAsync failed userId={} conversationId={}",
+                        userId, conversationId, error));
     }
 
     @Override
     public Mono<List<Map<String, Object>>> findRelevantMemoryAsync(String userId, String conversationId, String query, int limit) {
+        log.debug("findRelevantMemoryAsync invoked userId={} conversationId={} query='{}' limit={}",
+                userId, conversationId, query, limit);
         int safeLimit = limit > 0 ? limit : Math.max(1, configuredMemoryWindow);
-        return Mono.fromCallable(() -> new ArrayList<>(
-                memoryService.findRelevant(userId, conversationId, query, safeLimit)
-        ));
+        return Mono.fromCallable(() -> {
+                    List<Map<String, Object>> results = new ArrayList<>(
+                            memoryService.findRelevant(userId, conversationId, query, safeLimit)
+                    );
+                    return results;
+                })
+                .doOnSuccess(results -> log.debug("findRelevantMemoryAsync completed userId={} conversationId={} resultCount={}",
+                        userId, conversationId, results != null ? results.size() : 0))
+                .doOnError(error -> log.error("findRelevantMemoryAsync failed userId={} conversationId={}",
+                        userId, conversationId, error));
     }
 
     @Override
     public Mono<String> orchestrateChat(String userId, String conversationId, String prompt, @Nullable String toolChoice) {
+        log.debug("orchestrateChat invoked userId={} conversationId={} rawToolChoice={} promptLength={}",
+                userId, conversationId, toolChoice, prompt != null ? prompt.length() : 0);
         String normalizedChoice = normalizeToolChoice(toolChoice);
+        log.debug("orchestrateChat normalized toolChoice={}", normalizedChoice);
         int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
 
         List<Map<String, Object>> history = limitWindow(
@@ -216,11 +266,15 @@ public class AiServiceImpl implements AiService {
         });
 
         return orchestration.flatMap(answer -> Mono.fromRunnable(() -> memoryService.appendMessages(
-                        userId,
-                        conversationId,
-                        List.of(msg("user", prompt), msg("assistant", answer))
-                ))
-                .thenReturn(answer));
+                                userId,
+                                conversationId,
+                                List.of(msg("user", prompt), msg("assistant", answer))
+                        ))
+                        .thenReturn(answer))
+                .doOnSuccess(answer -> log.debug("orchestrateChat completed userId={} conversationId={} toolChoice={} responseLength={}",
+                        userId, conversationId, normalizedChoice, answer != null ? answer.length() : 0))
+                .doOnError(error -> log.error("orchestrateChat failed userId={} conversationId={} toolChoice={}",
+                        userId, conversationId, normalizedChoice, error));
     }
 
     private Mono<String> orchestrateLoop(String userId,
@@ -637,36 +691,116 @@ public class AiServiceImpl implements AiService {
     }
 
     private String extractDeltaSafely(String data) {
+        if (data == null || data.isBlank()) {
+            return "";
+        }
         try {
             JsonNode root = mapper.readTree(data);
 
             if (compatibility == Compatibility.OPENAI) {
-                JsonNode delta = root.path("choices").path(0).path("delta").path("content");
-                if (!delta.isMissingNode() && !delta.isNull()) {
-                    return delta.asText();
+                JsonNode deltaNode = root.path("choices").path(0).path("delta");
+                String deltaContent = coerceText(deltaNode.path("content"));
+                if (deltaContent != null && !deltaContent.isEmpty()) {
+                    return deltaContent;
                 }
-                if (root.has("content")) {
-                    return root.path("content").asText();
+
+                String reasoning = coerceText(deltaNode.path("reasoning"));
+                if (reasoning != null && !reasoning.isEmpty()) {
+                    return "[THINK] " + reasoning;
                 }
-                return null;
+
+                String messageContent = coerceText(root.path("choices").path(0).path("message").path("content"));
+                if (messageContent != null && !messageContent.isEmpty()) {
+                    return messageContent;
+                }
+
+                String rootContent = coerceText(root.path("content"));
+                if (rootContent != null && !rootContent.isEmpty()) {
+                    return rootContent;
+                }
+                return "";
             } else {
                 JsonNode messageNode = root.path("message");
-                JsonNode thinking = messageNode.path("thinking");
-                if (!thinking.isMissingNode() && !thinking.isNull() && !thinking.asText().isEmpty()) {
-                    return "[THINK] " + thinking.asText(); // allow front-end to render reasoning trace
+                String thinking = coerceText(messageNode.path("thinking"));
+                if (thinking != null && !thinking.isEmpty()) {
+                    return "[THINK] " + thinking;
                 }
-                JsonNode content = messageNode.path("content");
-                if (!content.isMissingNode() && !content.isNull()) {
-                    return content.asText();
+
+                String content = coerceText(messageNode.path("content"));
+                if (content != null && !content.isEmpty()) {
+                    return content;
                 }
-                if (root.has("content")) {
-                    return root.path("content").asText();
+
+                String rootContent = coerceText(root.path("content"));
+                if (rootContent != null && !rootContent.isEmpty()) {
+                    return rootContent;
                 }
-                return null;
+                return "";
             }
         } catch (Exception e) {
             return data; // some providers stream plain text
         }
+    }
+
+    private String coerceText(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isTextual()) {
+            return node.asText();
+        }
+        if (node.isNumber() || node.isBoolean()) {
+            return node.asText();
+        }
+        if (node.isArray()) {
+            StringBuilder builder = new StringBuilder();
+            for (JsonNode child : node) {
+                String text = coerceText(child);
+                if (text != null && !text.isEmpty()) {
+                    builder.append(text);
+                }
+            }
+            return builder.length() > 0 ? builder.toString() : null;
+        }
+        if (node.isObject()) {
+            if (node.has("text")) {
+                String text = coerceText(node.get("text"));
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+            if (node.has("value")) {
+                String text = coerceText(node.get("value"));
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+            if (node.has("content")) {
+                String text = coerceText(node.get("content"));
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+            if (node.has("data")) {
+                String text = coerceText(node.get("data"));
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+            // Fallback: iterate fields
+            for (Iterator<Map.Entry<String, JsonNode>> it = node.fields(); it.hasNext(); ) {
+                Map.Entry<String, JsonNode> entry = it.next();
+                if ("type".equals(entry.getKey()) || "id".equals(entry.getKey())) {
+                    continue;
+                }
+                String text = coerceText(entry.getValue());
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+            return null;
+        }
+        return node.asText();
     }
 
     private Map<String, Object> buildRequestBody(List<Map<String, Object>> messages, boolean stream) {
@@ -764,13 +898,91 @@ public class AiServiceImpl implements AiService {
         return !(throwable instanceof IllegalArgumentException);
     }
 
+    private Duration requestTimeout() {
+        long millis = Math.max(clientTimeoutMs, 1000);
+        return Duration.ofMillis(millis);
+    }
+
+    private Duration streamTimeout() {
+        long millis = Math.max(clientStreamTimeoutMs, 1000);
+        return Duration.ofMillis(millis);
+    }
+
+    private String trimToNull(Object value) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.toString().trim();
+        return trimmed;
+    }
+
+    private Retry retrySpec() {
+        int attempts = Math.max(clientRetryMaxAttempts, 1);
+        Duration backoff = Duration.ofMillis(Math.max(clientRetryBackoffMs, 100));
+        return Retry.backoff(attempts, backoff)
+                .filter(this::isRetryableError);
+    }
+
     @Override
     public Mono<String> decideToolsAsync(Map<String, Object> payload) {
+        log.debug("decideToolsAsync invoked payloadKeys={}", payload != null ? payload.keySet() : "null");
         return callChatCompletions(payload, false);
     }
 
     @Override
+    public Flux<String> decideToolsStreamAsync(Map<String, Object> payload) {
+        log.debug("decideToolsStreamAsync invoked payloadKeys={}", payload != null ? payload.keySet() : "null");
+
+        boolean mergeFinal = false;
+        if (payload != null && payload.containsKey("_merge_final")) {
+            Object v = payload.get("_merge_final");
+            mergeFinal = (v instanceof Boolean) ? (Boolean) v : Boolean.parseBoolean(String.valueOf(v));
+        }
+
+        if (!mergeFinal) {
+            // 保持原样：透传后端 SSE（rawStream=true 不做内容提取）
+            return callChatCompletionsStream(payload, true)
+                    .doOnSubscribe(subscription -> log.debug("decideToolsStreamAsync subscribed payloadKeys={}",
+                            payload != null ? payload.keySet() : "null"))
+                    .doOnNext(chunk -> log.trace("decideToolsStreamAsync chunk length={}",
+                            chunk != null ? chunk.length() : 0))
+                    .doOnComplete(() -> log.debug("decideToolsStreamAsync completed payloadKeys={}",
+                            payload != null ? payload.keySet() : "null"))
+                    .doOnError(error -> log.error("decideToolsStreamAsync failed payloadKeys={}",
+                            payload != null ? payload.keySet() : "null", error));
+        }
+
+        // merge_final=true：边透传边累积，结束后追加一条“合并后的完整 JSON”事件
+        StreamAccumulator acc = new StreamAccumulator();
+
+        return callChatCompletionsStream(payload, true)
+                .doOnNext(chunk -> {
+                    try {
+                        acc.applyChunk(mapper, chunk);
+                    } catch (Exception e) {
+                        log.warn("Failed to apply streaming chunk to accumulator, forwarding anyway", e);
+                        acc.appendFallbackText(chunk);
+                    }
+                })
+                // 先透传原始分片
+                .concatWith(Mono.fromSupplier(() -> {
+                    try {
+                        String merged = acc.toOpenAIStyleJson(mapper);
+                        log.debug("Emitting merged final JSON length={}", merged.length());
+                        return merged;
+                    } catch (Exception e) {
+                        log.error("Failed to build merged final JSON", e);
+                        return acc.fallbackAsSimpleJson(mapper);
+                    }
+                }))
+                .doOnSubscribe(s -> log.debug("decideToolsStreamAsync (merge_final) subscribed"))
+                .doOnComplete(() -> log.debug("decideToolsStreamAsync (merge_final) completed"))
+                .doOnError(err -> log.error("decideToolsStreamAsync (merge_final) failed", err));
+    }
+
+    @Override
     public Mono<String> continueAfterToolsAsync(Map<String, Object> payload) {
+        log.debug("continueAfterToolsAsync invoked payloadKeys={}", payload != null ? payload.keySet() : "null");
         return callChatCompletions(payload, false);
     }
 
@@ -778,10 +990,16 @@ public class AiServiceImpl implements AiService {
      * Shared helper for tool-enabled chat completions (non-streaming by default).
      */
     private Mono<String> callChatCompletions(Map<String, Object> payload, boolean stream) {
+        if (payload == null) {
+            log.error("callChatCompletions invoked with null payload");
+            return Mono.error(new IllegalArgumentException("payload is required"));
+        }
         Object reqModel = payload.getOrDefault("model", model);
         Object messages = payload.get("messages");
         Object tools = payload.get("tools");
         Object toolChoice = payload.getOrDefault("tool_choice", "auto");
+        log.debug("callChatCompletions invoked stream={} model={} toolChoice={} toolsPresent={}",
+                stream, reqModel, toolChoice, tools != null);
 
         if (messages == null) {
             return Mono.error(new IllegalArgumentException("messages is required"));
@@ -805,9 +1023,66 @@ public class AiServiceImpl implements AiService {
                 .onStatus(HttpStatusCode::is5xxServerError,
                         response -> mapToResponseStatus(response, "Upstream returned 5xx during tool call"))
                 .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(60))
-                .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
-                        .filter(this::isRetryableError));
+                .timeout(requestTimeout())
+                .retryWhen(retrySpec())
+                .doOnSuccess(response -> log.debug("callChatCompletions completed stream={} responseLength={}",
+                        stream, response != null ? response.length() : 0))
+                .doOnError(error -> log.error("callChatCompletions failed stream={}", stream, error));
+    }
+
+    private Flux<String> callChatCompletionsStream(Map<String, Object> payload) {
+        return callChatCompletionsStream(payload, false);
+    }
+
+    private Flux<String> callChatCompletionsStream(Map<String, Object> payload, boolean rawStream) {
+        if (payload == null) {
+            log.error("callChatCompletionsStream invoked with null payload");
+            return Flux.error(new IllegalArgumentException("payload is required"));
+        }
+
+        Object reqModel = payload.getOrDefault("model", model);
+        Object messages = payload.get("messages");
+        Object tools = payload.get("tools");
+        Object toolChoice = payload.getOrDefault("tool_choice", "auto");
+        log.debug("callChatCompletionsStream invoked model={} toolChoice={} toolsPresent={}",
+                reqModel, toolChoice, tools != null);
+
+        if (messages == null) {
+            return Flux.error(new IllegalArgumentException("messages is required"));
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("model", reqModel);
+        body.put("messages", messages);
+        if (tools != null) {
+            body.put("tools", tools);
+        }
+        body.put("tool_choice", toolChoice);
+        body.put("stream", true);
+
+        Flux<String> base = webClient.post()
+                .uri(path)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError,
+                        response -> mapToResponseStatus(response, "Upstream returned 4xx during tool call (stream)"))
+                .onStatus(HttpStatusCode::is5xxServerError,
+                        response -> mapToResponseStatus(response, "Upstream returned 5xx during tool call (stream)"))
+                .bodyToFlux(SSE_TYPE)
+                .timeout(streamTimeout())
+                .doOnNext(event -> log.trace("callChatCompletionsStream SSE event: {}", event))
+                .map(ServerSentEvent::data)
+                .map(this::trimToNull)
+                .filter(text -> text != null && !text.isEmpty())
+                .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data));
+
+        Flux<String> processed = rawStream
+                ? base
+                : base.map(this::extractDeltaSafely)
+                .filter(text -> text != null && !text.isEmpty());
+
+        return processed.retryWhen(retrySpec());
     }
 
     private static class ToolLoopException extends RuntimeException {
@@ -822,4 +1097,244 @@ public class AiServiceImpl implements AiService {
             return decision;
         }
     }
+
+    // ================== Streaming 合并累加器 ==================
+    /**
+     * 把 OpenAI 风格的流式 delta（choices[].delta.*）合并成一次性 JSON。
+     * 支持的片段：content / reasoning / tool_calls[index].function.{name,arguments} / id / type / finish_reason / role
+     */
+    private static final class StreamAccumulator {
+        private final StringBuilder content = new StringBuilder();
+        private final StringBuilder reasoning = new StringBuilder();
+        private final List<ToolCallAgg> toolCalls = new ArrayList<>();
+        private String finishReason = null;
+        private String role = "assistant";
+
+        void applyChunk(ObjectMapper mapper, String chunkJson) throws Exception {
+            if (chunkJson == null || chunkJson.isBlank()) return;
+
+            JsonNode root = mapper.readTree(chunkJson);
+
+            // 期望 OpenAI 结构：choices[0].delta...
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.size() == 0) {
+                // 非标准：兼容顶层 message / content
+                appendMaybeTopLevel(root);
+                return;
+            }
+
+            JsonNode choice0 = choices.get(0);
+            if (choice0.hasNonNull("finish_reason")) {
+                String fr = choice0.get("finish_reason").asText(null);
+                if (fr != null && !fr.isBlank()) this.finishReason = fr;
+            }
+
+            JsonNode delta = choice0.path("delta");
+            if (!delta.isMissingNode()) {
+                // role
+                String r = textOrNull(delta, "role");
+                if (r != null) this.role = r;
+
+                // content
+                String c = textOrNull(delta, "content");
+                if (c != null) this.content.append(c);
+
+                // reasoning
+                String rs = textOrNull(delta, "reasoning");
+                if (rs != null) this.reasoning.append(rs);
+
+                // tool_calls[]
+                JsonNode tcs = delta.path("tool_calls");
+                if (tcs.isArray()) {
+                    for (JsonNode tc : tcs) {
+                        int index = tc.path("index").asInt(-1);
+                        if (index < 0) {
+                            index = toolCalls.size();
+                        }
+                        while (toolCalls.size() <= index) toolCalls.add(new ToolCallAgg());
+
+                        ToolCallAgg agg = toolCalls.get(index);
+                        String id = textOrNull(tc, "id");
+                        if (id != null) agg.id = id;
+                        String type = textOrNull(tc, "type");
+                        if (type != null) agg.type = type;
+
+                        JsonNode fn = tc.path("function");
+                        if (!fn.isMissingNode()) {
+                            String name = textOrNull(fn, "name");
+                            if (name != null) agg.name = name;
+                            String argsPiece = textOrNull(fn, "arguments");
+                            if (argsPiece != null) agg.arguments.append(argsPiece);
+                        }
+                    }
+                }
+            } else {
+                // 非标准：兼容顶层
+                appendMaybeTopLevel(root);
+            }
+        }
+
+        void appendFallbackText(String txt) {
+            if (txt != null && !txt.isBlank()) {
+                this.content.append(txt);
+            }
+        }
+
+        private void appendMaybeTopLevel(JsonNode root) {
+            // 兼容一些非标准字段
+            String rc = textDeep(root, "message", "content");
+            if (rc != null) this.content.append(rc);
+
+            String rt = textDeep(root, "message", "thinking");
+            if (rt != null) this.reasoning.append(rt);
+
+            String c = textOrNull(root, "content");
+            if (c != null) this.content.append(c);
+        }
+
+        String toOpenAIStyleJson(ObjectMapper mapper) throws Exception {
+            ObjectNode root = mapper.createObjectNode();
+            ArrayNode choices = mapper.createArrayNode();
+
+            ObjectNode choice = mapper.createObjectNode();
+            ObjectNode message = mapper.createObjectNode();
+            message.put("role", role);
+            message.put("content", content.toString());
+
+            // 非标准扩展：保留 reasoning（如果有）
+            if (reasoning.length() > 0) {
+                message.put("reasoning", reasoning.toString());
+            }
+
+            if (!toolCalls.isEmpty()) {
+                ArrayNode tca = mapper.createArrayNode();
+                for (ToolCallAgg t : toolCalls) {
+                    ObjectNode tcn = mapper.createObjectNode();
+                    if (t.id != null) tcn.put("id", t.id);
+                    tcn.put("type", t.type != null ? t.type : "function");
+
+                    ObjectNode fn = mapper.createObjectNode();
+                    if (t.name != null) fn.put("name", t.name);
+                    // 注意：arguments 必须是字符串（模型流式输出的 JSON 片段）
+                    fn.put("arguments", t.arguments.toString());
+                    tcn.set("function", fn);
+                    tca.add(tcn);
+                }
+                message.set("tool_calls", tca);
+            }
+
+            choice.set("message", message);
+            if (finishReason != null) choice.put("finish_reason", finishReason);
+
+            choices.add(choice);
+            root.set("choices", choices);
+            return mapper.writeValueAsString(root);
+        }
+
+        String fallbackAsSimpleJson(ObjectMapper mapper) {
+            try {
+                ObjectNode root = mapper.createObjectNode();
+                ArrayNode choices = mapper.createArrayNode();
+                ObjectNode choice = mapper.createObjectNode();
+                ObjectNode msg = mapper.createObjectNode();
+                msg.put("role", role);
+                msg.put("content", content.toString());
+                choice.set("message", msg);
+                choices.add(choice);
+                root.set("choices", choices);
+                return mapper.writeValueAsString(root);
+            } catch (Exception e) {
+                return content.toString();
+            }
+        }
+
+        private static String textOrNull(JsonNode node, String field) {
+            if (node == null || node.isMissingNode()) return null;
+            JsonNode v = node.get(field);
+            return (v != null && !v.isNull()) ? v.asText() : null;
+        }
+
+        private static String textDeep(JsonNode node, String f1, String f2) {
+            if (node == null) return null;
+            JsonNode n1 = node.path(f1);
+            if (n1.isMissingNode()) return null;
+            return textOrNull(n1, f2);
+        }
+
+        private static final class ToolCallAgg {
+            String id;
+            String type;
+            String name;
+            final StringBuilder arguments = new StringBuilder();
+        }
+    }
+
+    @Override
+    public Flux<String> continueAfterToolsStreamAsync(Map<String, Object> payload) {
+        log.debug("continueAfterToolsStreamAsync invoked payloadKeys={}", payload != null ? payload.keySet() : "null");
+
+        boolean deltaText = false;
+        boolean mergeFinal = false;
+        boolean rawStream = true; // 默认透传
+
+        if (payload != null) {
+            Object dt = payload.get("_delta_text");
+            if (dt != null) deltaText = (dt instanceof Boolean) ? (Boolean) dt : Boolean.parseBoolean(String.valueOf(dt));
+
+            Object mf = payload.get("_merge_final");
+            if (mf != null) mergeFinal = (mf instanceof Boolean) ? (Boolean) mf : Boolean.parseBoolean(String.valueOf(mf));
+
+            Object rs = payload.get("_raw_stream");
+            if (rs != null) rawStream = (rs instanceof Boolean) ? (Boolean) rs : Boolean.parseBoolean(String.valueOf(rs));
+        }
+
+        // 若指定 _delta_text 为 true，则输出“纯文本增量”，不再透传 JSON
+        if (deltaText) {
+            return callChatCompletionsStream(payload, false) // false => 使用 extractDeltaSafely 输出可读文本
+                    .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (_delta_text) subscribed"))
+                    .doOnComplete(() -> log.debug("continueAfterToolsStreamAsync (_delta_text) completed"))
+                    .doOnError(err -> log.error("continueAfterToolsStreamAsync (_delta_text) failed", err));
+        }
+
+        // 若需要合并最终 JSON：边透传 raw JSON 边累积，结束时再追加一条合并后的完整 JSON
+        if (mergeFinal) {
+            StreamAccumulator acc = new StreamAccumulator();
+            return callChatCompletionsStream(payload, true) // 原样透传
+                    .doOnNext(chunk -> {
+                        try {
+                            acc.applyChunk(mapper, chunk);
+                        } catch (Exception e) {
+                            log.warn("continueAfterToolsStreamAsync applyChunk failed, forwarding anyway", e);
+                            acc.appendFallbackText(chunk);
+                        }
+                    })
+                    .concatWith(Mono.fromSupplier(() -> {
+                        try {
+                            String merged = acc.toOpenAIStyleJson(mapper);
+                            log.debug("continueAfterToolsStreamAsync emit merged final JSON length={}", merged.length());
+                            return merged;
+                        } catch (Exception e) {
+                            log.error("continueAfterToolsStreamAsync build merged final JSON failed", e);
+                            return acc.fallbackAsSimpleJson(mapper);
+                        }
+                    }))
+                    .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (_merge_final) subscribed"))
+                    .doOnComplete(() -> log.debug("continueAfterToolsStreamAsync (_merge_final) completed"))
+                    .doOnError(err -> log.error("continueAfterToolsStreamAsync (_merge_final) failed", err));
+        }
+
+        // 默认：raw 透传（逐帧 JSON），可用 _raw_stream=false 强制走 delta 文本解析
+        if (!rawStream) {
+            return callChatCompletionsStream(payload, false)
+                    .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (forced-delta) subscribed"))
+                    .doOnComplete(() -> log.debug("continueAfterToolsStreamAsync (forced-delta) completed"))
+                    .doOnError(err -> log.error("continueAfterToolsStreamAsync (forced-delta) failed", err));
+        }
+
+        return callChatCompletionsStream(payload, true)
+                .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (raw) subscribed"))
+                .doOnComplete(() -> log.debug("continueAfterToolsStreamAsync (raw) completed"))
+                .doOnError(err -> log.error("continueAfterToolsStreamAsync (raw) failed", err));
+    }
+
 }

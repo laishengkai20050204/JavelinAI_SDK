@@ -5,8 +5,7 @@ import com.example.tools.AiTool;
 import com.example.tools.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -15,8 +14,8 @@ import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class FindRelevantMemoryTool implements AiTool {
-    private static final Logger log = LoggerFactory.getLogger(FindRelevantMemoryTool.class);
     private static final int MIN_MESSAGES = 1;
     private static final int MAX_MESSAGES = 50;
 

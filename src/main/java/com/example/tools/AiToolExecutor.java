@@ -3,8 +3,7 @@ package com.example.tools;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -14,8 +13,8 @@ import java.util.Objects;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class AiToolExecutor {
-    private static final Logger log = LoggerFactory.getLogger(AiToolExecutor.class);
 
     private final ToolRegistry registry;
     private final ObjectMapper mapper;
@@ -25,6 +24,7 @@ public class AiToolExecutor {
     public Map<String, Object> toAssistantToolCallsMessage(List<ToolCall> calls) {
         List<Map<String, Object>> arr = new ArrayList<>();
         for (ToolCall call : calls) {
+            log.trace("Preparing assistant tool call message id={} name={}", call.id(), call.name());
             arr.add(Map.of(
                     "id", call.id(),
                     "type", "function",
@@ -43,8 +43,10 @@ public class AiToolExecutor {
 
     public List<Map<String, Object>> executeAll(List<ToolCall> calls,
                                                 Map<String, Object> fallbackArgs) throws Exception {
+        log.debug("Executing {} tool call(s)", calls.size());
         List<Map<String, Object>> results = new ArrayList<>();
         for (ToolCall call : calls) {
+            log.debug("Executing tool call id={} name={}", call.id(), call.name());
             AiTool tool = registry.get(call.name())
                     .orElseThrow(() -> new IllegalArgumentException("Unknown tool: " + call.name()));
 
@@ -70,7 +72,10 @@ public class AiToolExecutor {
                     "tool_call_id", call.id(),
                     "content", result.contentJson()
             ));
+            log.debug("Tool '{}' call id={} produced payloadLength={}",
+                    tool.name(), call.id(), result.contentJson() != null ? result.contentJson().length() : 0);
         }
+        log.debug("Completed execution of {} tool call(s)", results.size());
         return results;
     }
 }
