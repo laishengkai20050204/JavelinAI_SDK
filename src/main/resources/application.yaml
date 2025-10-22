@@ -12,6 +12,10 @@ ai:
   think:
     enabled: true               # enable optional thinking mode
 #    level: medium               # optional: send low/medium/high when the upstream supports it
+  tools:
+    max-loops: 2
+  memory:
+    max-messages: 12
 
 spring:
   main:
