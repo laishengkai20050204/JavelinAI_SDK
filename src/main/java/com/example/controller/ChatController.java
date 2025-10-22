@@ -44,7 +44,6 @@ public class ChatController {
                 .onErrorResume(e -> Flux.just("ERR: " + e.getMessage()));
     }
 
-    // ChatController.java
     @PostMapping("/decide")
     @Operation(summary = "函数调用-让模型决定要不要调用哪些函数（不执行）")
     public Mono<String> decide(@RequestBody Map<String, Object> payload) {
