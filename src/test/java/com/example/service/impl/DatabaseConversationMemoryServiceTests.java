@@ -1,14 +1,12 @@
 package com.example.service.impl;
 
 import com.example.service.impl.entity.ConversationMessageEntity;
+import com.example.service.impl.mapper.ConversationMemoryMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
 import java.time.LocalDateTime;
 import java.time.Month;
@@ -18,20 +16,19 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DatabaseConversationMemoryServiceTests {
 
-    private NamedParameterJdbcTemplate jdbcTemplate;
+    private ConversationMemoryMapper mapper;
     private DatabaseConversationMemoryService service;
 
     @BeforeEach
     void setUp() {
-        jdbcTemplate = Mockito.mock(NamedParameterJdbcTemplate.class);
-        service = new DatabaseConversationMemoryService(jdbcTemplate, new ObjectMapper());
+        mapper = Mockito.mock(ConversationMemoryMapper.class);
+        service = new DatabaseConversationMemoryService(mapper, new ObjectMapper());
     }
 
     @Test
@@ -44,8 +41,7 @@ class DatabaseConversationMemoryServiceTests {
         entity.setMessageTimestamp("2024-06-01T12:00:00Z");
         entity.setCreatedAt(LocalDateTime.of(2024, Month.JUNE, 1, 12, 0));
 
-        when(jdbcTemplate.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(List.of(entity));
+        when(mapper.selectHistory("u", "c")).thenReturn(List.of(entity));
 
         List<Map<String, Object>> history = service.getHistory("u", "c");
 
@@ -58,24 +54,22 @@ class DatabaseConversationMemoryServiceTests {
 
     @Test
     void appendMessagesSerializesAndPersists() {
-        when(jdbcTemplate.update(anyString(), any(SqlParameterSource.class))).thenReturn(1);
-
         service.appendMessages("u", "c", List.of(Map.of(
                 "role", "user",
                 "content", "hi there"
         )));
 
-        ArgumentCaptor<SqlParameterSource> captor = ArgumentCaptor.forClass(SqlParameterSource.class);
-        verify(jdbcTemplate).update(anyString(), captor.capture());
+        ArgumentCaptor<ConversationMessageEntity> captor = ArgumentCaptor.forClass(ConversationMessageEntity.class);
+        verify(mapper).insertMessage(captor.capture());
 
-        SqlParameterSource params = captor.getValue();
-        assertThat(params.getValue("userId")).isEqualTo("u");
-        assertThat(params.getValue("conversationId")).isEqualTo("c");
-        assertThat(params.getValue("role")).isEqualTo("user");
-        assertThat(params.getValue("content")).isEqualTo("hi there");
-        assertThat(params.getValue("payload")).asString().contains("\"content\":\"hi there\"");
-        assertThat(params.getValue("messageTimestamp")).isNull();
-        assertThat(params.getValue("createdAt")).isNotNull();
+        ConversationMessageEntity saved = captor.getValue();
+        assertThat(saved.getUserId()).isEqualTo("u");
+        assertThat(saved.getConversationId()).isEqualTo("c");
+        assertThat(saved.getRole()).isEqualTo("user");
+        assertThat(saved.getContent()).isEqualTo("hi there");
+        assertThat(saved.getPayload()).contains("\"content\":\"hi there\"");
+        assertThat(saved.getMessageTimestamp()).isNull();
+        assertThat(saved.getCreatedAt()).isNotNull();
     }
 
     @Test
@@ -88,12 +82,13 @@ class DatabaseConversationMemoryServiceTests {
         fallback.setMessageTimestamp("2024-07-10T08:30:00Z");
         fallback.setCreatedAt(LocalDateTime.of(2024, Month.JULY, 10, 8, 30));
 
-        when(jdbcTemplate.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(List.of(), List.of(fallback));
+        when(mapper.selectByContent("u", "c", "missing", 5)).thenReturn(List.of());
+        when(mapper.selectLatest("u", "c", 5)).thenReturn(List.of(fallback));
 
         List<Map<String, Object>> messages = service.findRelevant("u", "c", "missing", 5);
 
-        verify(jdbcTemplate, times(2)).query(anyString(), any(SqlParameterSource.class), any(RowMapper.class));
+        verify(mapper).selectByContent("u", "c", "missing", 5);
+        verify(mapper).selectLatest("u", "c", 5);
         assertThat(messages).hasSize(1);
         Map<String, Object> message = messages.getFirst();
         assertThat(message.get("content")).isEqualTo("latest response");

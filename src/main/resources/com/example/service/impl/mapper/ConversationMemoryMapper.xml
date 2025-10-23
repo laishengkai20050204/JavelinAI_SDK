@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.service.impl.mapper.ConversationMemoryMapper">
+
+    <resultMap id="ConversationMessageMap" type="com.example.service.impl.entity.ConversationMessageEntity">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="role" column="role"/>
+        <result property="content" column="content"/>
+        <result property="payload" column="payload"/>
+        <result property="messageTimestamp" column="message_timestamp"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        id, user_id, conversation_id, role, content, payload, message_timestamp, created_at
+    </sql>
+
+    <select id="selectHistory" resultMap="ConversationMessageMap">
+        SELECT <include refid="baseColumns"/>
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+        ORDER BY created_at ASC
+    </select>
+
+    <insert id="insertMessage" parameterType="com.example.service.impl.entity.ConversationMessageEntity"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO conversation_messages
+        (user_id, conversation_id, role, content, payload, message_timestamp, created_at)
+        VALUES (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp}, #{createdAt})
+    </insert>
+
+    <delete id="deleteConversation">
+        DELETE FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+    </delete>
+
+    <select id="selectByContent" resultMap="ConversationMessageMap">
+        SELECT <include refid="baseColumns"/>
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND content LIKE CONCAT('%', #{query}, '%')
+        ORDER BY created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectLatest" resultMap="ConversationMessageMap">
+        SELECT <include refid="baseColumns"/>
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+        ORDER BY created_at DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

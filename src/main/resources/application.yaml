@@ -43,3 +43,6 @@ springdoc:
 logging:
   level:
     com.example: DEBUG
+
+mybatis:
+  mapper-locations: classpath*:com/example/service/impl/mapper/*.xml

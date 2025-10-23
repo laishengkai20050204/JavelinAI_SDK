@@ -6,7 +6,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-//@MapperScan("com.example.service.impl.mapper")
+@MapperScan("com.example.service.impl.mapper")
 @Slf4j
 public class JavelinAiSdkApplication {
 
