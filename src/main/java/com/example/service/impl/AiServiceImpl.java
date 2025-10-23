@@ -30,6 +30,7 @@ import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -202,7 +203,7 @@ public class AiServiceImpl implements AiService {
 
         return chatOnceCore(conversation)
                 .map(this::extractContentSafely)
-                .doOnNext(reply -> memoryService.appendMessages(
+                .doOnNext(reply -> appendToMemory(
                         userId,
                         conversationId,
                         List.of(userEntry, createMessage("assistant", reply))
@@ -267,7 +268,7 @@ public class AiServiceImpl implements AiService {
                     });
         });
 
-        return orchestration.flatMap(answer -> Mono.fromRunnable(() -> memoryService.appendMessages(
+        return orchestration.flatMap(answer -> Mono.fromRunnable(() -> appendToMemory(
                                 userId,
                                 conversationId,
                                 List.of(createMessage("user", prompt), createMessage("assistant", answer))
@@ -819,6 +820,26 @@ public class AiServiceImpl implements AiService {
 
     private Map<String, Object> createMessage(String role, String content) {
         return Map.of("role", role, "content", content);
+    }
+
+    private void appendToMemory(String userId, String conversationId, List<Map<String, Object>> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        memoryService.appendMessages(userId, conversationId, timestampMessages(messages));
+    }
+
+    private List<Map<String, Object>> timestampMessages(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> enriched = new ArrayList<>(messages.size());
+        for (Map<String, Object> original : messages) {
+            if (original == null) {
+                continue;
+            }
+            Map<String, Object> copy = new HashMap<>(original);
+            copy.putIfAbsent("timestamp", Instant.now().toString());
+            enriched.add(copy);
+        }
+        return enriched;
     }
 
     private List<Map<String, Object>> limitWindow(List<Map<String, Object>> history, int limit) {
@@ -1619,7 +1640,7 @@ public class AiServiceImpl implements AiService {
                     })
                     .doOnComplete(() -> {
                         try {
-                            memoryService.appendMessages(userId, conversationId,
+                            appendToMemory(userId, conversationId,
                                     List.of(userMsg, createMessage("assistant", finalText.toString())));
                         } catch (Exception e) {
                             log.warn("Failed to append messages to memory after v2 stream", e);
