@@ -2,6 +2,7 @@ package com.example.service.impl;
 
 import com.example.service.ConversationMemoryService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
+@ConditionalOnProperty(name = "ai.memory.storage", havingValue = "in-memory", matchIfMissing = true)
 @Slf4j
 public class InMemoryConversationMemoryService implements ConversationMemoryService {
 

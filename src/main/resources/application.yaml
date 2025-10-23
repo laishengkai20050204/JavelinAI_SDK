@@ -15,6 +15,7 @@ ai:
   tools:
     max-loops: 2
   memory:
+    storage: database        # uncomment to use DatabaseConversationMemoryService (requires configured datasource)
     max-messages: 12
   client:
     timeout-ms: 180000           # wait longer for upstream completion calls
@@ -23,13 +24,18 @@ ai:
       max-attempts: 3
       backoff-ms: 500
 
+
 spring:
   main:
     web-application-type: reactive
   http:
     codecs:
       max-in-memory-size: 16MB
-
+  datasource:
+    url: jdbc:mysql://localhost:3306/java_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
+    username: root
+    password: 123
+    driver-class-name: com.mysql.cj.jdbc.Driver
 springdoc:
   swagger-ui:
     path: /swagger-ui
