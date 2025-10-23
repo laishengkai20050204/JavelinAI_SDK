@@ -2,12 +2,19 @@ package com.example.service.impl;
 
 import com.example.service.AiService;
 import com.example.service.ConversationMemoryService;
+import com.example.service.impl.dto.ExecTarget;
 import com.example.service.impl.dto.ModelDecision;
+import com.example.service.impl.dto.NdjsonEvent;
+import com.example.service.impl.dto.OrchestrationStep;
 import com.example.service.impl.dto.PlanAction;
 import com.example.service.impl.dto.ToolCall;
+import com.example.service.impl.dto.ToolCallDTO;
+import com.example.service.impl.dto.ToolResultDTO;
+import com.example.service.impl.dto.V2StepNdjsonRequest;
 import com.example.tools.AiToolExecutor;
 import com.example.tools.ToolRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -27,19 +34,29 @@ import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.publisher.FluxSink;
+import reactor.core.Disposable;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -49,6 +66,7 @@ public class AiServiceImpl implements AiService {
     private static final Set<String> SUPPORTED_TOOL_CHOICES = Set.of("auto", "none", "required");
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<ServerSentEvent<String>>() {};
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     public enum Compatibility { OLLAMA, OPENAI }
 
@@ -90,6 +108,9 @@ public class AiServiceImpl implements AiService {
 
     @Value("${ai.client.retry.backoff-ms:300}")
     private long clientRetryBackoffMs;
+
+    @Value("${ai.stepjson.heartbeat-seconds:5}")
+    private long stepJsonHeartbeatSeconds;
 
     public AiServiceImpl(
             WebClient aiWebClient,
@@ -1694,6 +1715,629 @@ public class AiServiceImpl implements AiService {
                     return Flux.just("抱歉，流式会话发生异常，请稍后重试。");
                 });
     }
+
+    @Override
+    public Flux<String> orchestrateStepNdjson(V2StepNdjsonRequest req) {
+        if (req == null) {
+            return Flux.just(toNdjson(errorEvent("request body is required")));
+        }
+
+        return Flux.create(sink -> {
+            StepState state = new StepState(req);
+            AtomicBoolean completed = new AtomicBoolean(false);
+
+            sink.onDispose(() -> {
+                completed.set(true);
+                if (state.heartbeat != null && !state.heartbeat.isDisposed()) {
+                    state.heartbeat.dispose();
+                }
+            });
+
+            sink.next(toNdjson(NdjsonEvent.builder()
+                    .event("started")
+                    .ts(now())
+                    .data(state.startedData())
+                    .build()));
+
+            state.heartbeat = Flux.interval(Duration.ofSeconds(Math.max(1L, stepJsonHeartbeatSeconds)))
+                    .subscribe(tick -> {
+                        if (!completed.get()) {
+                            sink.next(toNdjson(NdjsonEvent.builder()
+                                    .event("heartbeat")
+                                    .ts(now())
+                                    .build()));
+                        }
+                    });
+
+            runStepFlow(state, sink)
+                    .subscribe(unused -> { },
+                            error -> {
+                                handleStepError(sink, state, error);
+                                completed.set(true);
+                                if (state.heartbeat != null && !state.heartbeat.isDisposed()) {
+                                    state.heartbeat.dispose();
+                                }
+                                sink.complete();
+                            },
+                            () -> {
+                                completed.set(true);
+                                if (state.heartbeat != null && !state.heartbeat.isDisposed()) {
+                                    state.heartbeat.dispose();
+                                }
+                                sink.complete();
+                            });
+        }, FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    private Mono<Void> runStepFlow(StepState state, FluxSink<String> sink) {
+        if (!state.hasIdentifiers()) {
+            String message = "userId and conversationId are required";
+            sink.next(toNdjson(errorEvent(message)));
+            state.error = message;
+            state.finished = true;
+            state.remainingLoops = 0;
+            state.assistantSummary = Optional.ofNullable(state.assistantSummary).orElse(message);
+            emitStep(sink, state);
+            return Mono.empty();
+        }
+
+        state.appendClientResults();
+
+        if (!state.hasUserPrompt && !state.hasClientResults) {
+            String message = "Either q or clientResults must be provided";
+            sink.next(toNdjson(errorEvent(message)));
+            state.error = message;
+            state.finished = true;
+            state.remainingLoops = 0;
+            state.assistantSummary = Optional.ofNullable(state.assistantSummary).orElse(message);
+            emitStep(sink, state);
+            return Mono.empty();
+        }
+
+        if (state.hasUserPrompt) {
+            sink.next(toNdjson(progressEvent("deciding")));
+            return decideStep(state)
+                    .flatMap(decision -> handleDecision(state, sink, decision));
+        } else {
+            sink.next(toNdjson(progressEvent("continuing")));
+            return continueWithoutDecision(state, sink);
+        }
+    }
+
+    private Mono<DecisionPayload> decideStep(StepState state) {
+        List<Map<String, Object>> messages = new ArrayList<>(state.conversation);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("model", model);
+        payload.put("messages", messages);
+
+        if (!state.mergedTools.isEmpty()) {
+            payload.put("tools", state.mergedTools);
+            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
+        } else {
+            payload.put("tool_choice", "none");
+        }
+
+        return callChatCompletions(payload, false)
+                .map(json -> new DecisionPayload(parseDecision(json), json, extractContentSafely(json)));
+    }
+
+    private Mono<Void> handleDecision(StepState state, FluxSink<String> sink, DecisionPayload payload) {
+        return Mono.defer(() -> {
+            ModelDecision decision = payload.decision();
+            String summary = payload.assistantSummary();
+            if (summary != null && !summary.isBlank()) {
+                state.assistantSummary = summary;
+            }
+
+            if (decision == null || !decision.hasToolCalls()) {
+                if (summary != null && !summary.isBlank()) {
+                    state.conversation.add(createMessage("assistant", summary));
+                    state.finalAnswer = summary;
+                }
+                state.finished = true;
+                state.remainingLoops = 0;
+                emitStep(sink, state);
+                return Mono.empty();
+            }
+
+            List<ToolCall> toolCalls = decision.getToolCalls();
+            List<AiToolExecutor.ToolCall> allCalls = new ArrayList<>();
+            List<AiToolExecutor.ToolCall> serverCalls = new ArrayList<>();
+            Map<String, String> serverNameById = new HashMap<>();
+            List<ToolCallDTO> clientCalls = new ArrayList<>();
+
+            for (ToolCall call : toolCalls) {
+                Map<String, Object> arguments = parseArguments(call);
+                AiToolExecutor.ToolCall execCall = new AiToolExecutor.ToolCall(
+                        call.getId(),
+                        call.getName(),
+                        call.getArgumentsJson()
+                );
+                allCalls.add(execCall);
+                if (toolRegistry.isServerTool(call.getName())) {
+                    serverCalls.add(execCall);
+                    serverNameById.put(call.getId(), call.getName());
+                } else if (state.clientToolNames.contains(call.getName())) {
+                    clientCalls.add(buildToolCallDto(call, ExecTarget.CLIENT, arguments));
+                } else {
+                    clientCalls.add(buildToolCallDto(call, ExecTarget.CLIENT, arguments));
+                }
+            }
+
+            if (!allCalls.isEmpty()) {
+                state.conversation.add(toolExecutor.toAssistantToolCallsMessage(allCalls));
+            }
+
+            Mono<ServerExecutionResult> serverExecution = serverCalls.isEmpty()
+                    ? Mono.just(new ServerExecutionResult(Collections.emptyList(), Collections.emptyList()))
+                    : Mono.fromCallable(() -> executeServerCalls(serverCalls, state, serverNameById))
+                    .subscribeOn(Schedulers.boundedElastic());
+
+            return serverExecution.flatMap(result -> {
+                if (!result.messages().isEmpty()) {
+                    state.conversation.addAll(result.messages());
+                }
+                if (!result.results().isEmpty()) {
+                    state.serverResults.addAll(result.results());
+                    sink.next(toNdjson(NdjsonEvent.builder()
+                            .event("serverResults")
+                            .ts(now())
+                            .data(Map.of("results", result.results()))
+                            .build()));
+                }
+
+                if (!clientCalls.isEmpty()) {
+                    state.pendingClientCalls.addAll(clientCalls);
+                    sink.next(toNdjson(NdjsonEvent.builder()
+                            .event("pendingClientCalls")
+                            .ts(now())
+                            .data(Map.of("calls", clientCalls))
+                            .build()));
+                    state.finished = false;
+                    state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                    if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+                        state.assistantSummary = "等待客户端工具执行。";
+                    }
+                    emitStep(sink, state);
+                    return Mono.empty();
+                }
+
+                return continueAfterServerTools(state, sink, summary);
+            });
+        });
+    }
+
+    private Mono<Void> continueAfterServerTools(StepState state, FluxSink<String> sink, String fallbackSummary) {
+        sink.next(toNdjson(progressEvent("continuing")));
+
+        List<Map<String, Object>> messages = new ArrayList<>(state.conversation);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("model", model);
+        payload.put("messages", messages);
+        if (!state.mergedTools.isEmpty()) {
+            payload.put("tools", state.mergedTools);
+            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
+        } else {
+            payload.put("tool_choice", "none");
+        }
+
+        return callChatCompletions(payload, false)
+                .flatMap(json -> {
+                    ModelDecision followUp = parseDecision(json);
+                    String content = extractContentSafely(json);
+                    if (content != null && !content.isBlank()) {
+                        state.assistantSummary = content;
+                    } else if (fallbackSummary != null && !fallbackSummary.isBlank()) {
+                        state.assistantSummary = fallbackSummary;
+                    }
+
+                    if (followUp != null && followUp.hasToolCalls()) {
+                        ToolCallSplit split = splitToolCalls(followUp.getToolCalls(), state);
+                        if (!split.client().isEmpty()) {
+                            state.pendingClientCalls.addAll(split.client());
+                            sink.next(toNdjson(NdjsonEvent.builder()
+                                    .event("pendingClientCalls")
+                                    .ts(now())
+                                    .data(Map.of("calls", split.client()))
+                                    .build()));
+                            state.finished = false;
+                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                            emitStep(sink, state);
+                            return Mono.empty();
+                        }
+                        if (!split.server().isEmpty()) {
+                            log.warn("Follow-up produced {} server tool call(s) after single-round execution", split.server().size());
+                            state.finished = false;
+                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                            if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+                                state.assistantSummary = "额外的服务端操作将在下一轮执行。";
+                            }
+                            emitStep(sink, state);
+                            return Mono.empty();
+                        }
+                    }
+
+                    if (content != null && !content.isBlank()) {
+                        state.conversation.add(createMessage("assistant", content));
+                        state.finalAnswer = content;
+                    }
+                    state.finished = true;
+                    state.remainingLoops = 0;
+                    emitStep(sink, state);
+                    return Mono.empty();
+                });
+    }
+
+    private Mono<Void> continueWithoutDecision(StepState state, FluxSink<String> sink) {
+        List<Map<String, Object>> messages = new ArrayList<>(state.conversation);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("model", model);
+        payload.put("messages", messages);
+        if (!state.mergedTools.isEmpty()) {
+            payload.put("tools", state.mergedTools);
+            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
+        } else {
+            payload.put("tool_choice", "none");
+        }
+
+        return callChatCompletions(payload, false)
+                .flatMap(json -> {
+                    ModelDecision followUp = parseDecision(json);
+                    String content = extractContentSafely(json);
+                    if (content != null && !content.isBlank()) {
+                        state.assistantSummary = content;
+                    }
+
+                    if (followUp != null && followUp.hasToolCalls()) {
+                        ToolCallSplit split = splitToolCalls(followUp.getToolCalls(), state);
+                        if (!split.client().isEmpty()) {
+                            state.pendingClientCalls.addAll(split.client());
+                            sink.next(toNdjson(NdjsonEvent.builder()
+                                    .event("pendingClientCalls")
+                                    .ts(now())
+                                    .data(Map.of("calls", split.client()))
+                                    .build()));
+                            state.finished = false;
+                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                            emitStep(sink, state);
+                            return Mono.empty();
+                        }
+                        if (!split.server().isEmpty()) {
+                            log.warn("Continuation produced {} server tool call(s) without new prompt", split.server().size());
+                            state.finished = false;
+                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                            if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+                                state.assistantSummary = "服务端将继续处理后续操作。";
+                            }
+                            emitStep(sink, state);
+                            return Mono.empty();
+                        }
+                    }
+
+                    if (content != null && !content.isBlank()) {
+                        state.conversation.add(createMessage("assistant", content));
+                        state.finalAnswer = content;
+                    }
+                    state.finished = true;
+                    state.remainingLoops = 0;
+                    emitStep(sink, state);
+                    return Mono.empty();
+                });
+    }
+
+    private ServerExecutionResult executeServerCalls(List<AiToolExecutor.ToolCall> serverCalls,
+                                                     StepState state,
+                                                     Map<String, String> serverNameById) throws Exception {
+        Map<String, Object> fallbackArgs = new HashMap<>();
+        fallbackArgs.put("userId", state.userId);
+        fallbackArgs.put("conversationId", state.conversationId);
+        fallbackArgs.put("maxMessages", resolveMemoryWindow(12));
+        if (state.request.getQ() != null && !state.request.getQ().isBlank()) {
+            fallbackArgs.put("query", state.request.getQ());
+        }
+
+        List<Map<String, Object>> messages = toolExecutor.executeAll(serverCalls, fallbackArgs);
+        List<ToolResultDTO> results = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            String id = Objects.toString(message.get("tool_call_id"), null);
+            String name = serverNameById.getOrDefault(id, "");
+            String content = Objects.toString(message.get("content"), "");
+            results.add(new ToolResultDTO(id, name, content));
+        }
+        return new ServerExecutionResult(messages, results);
+    }
+
+    private ToolCallSplit splitToolCalls(List<ToolCall> calls, StepState state) {
+        if (calls == null || calls.isEmpty()) {
+            return new ToolCallSplit(Collections.emptyList(), Collections.emptyList());
+        }
+        List<ToolCallDTO> client = new ArrayList<>();
+        List<ToolCallDTO> server = new ArrayList<>();
+        for (ToolCall call : calls) {
+            Map<String, Object> arguments = parseArguments(call);
+            if (toolRegistry.isServerTool(call.getName())) {
+                server.add(buildToolCallDto(call, ExecTarget.SERVER, arguments));
+            } else if (state.clientToolNames.contains(call.getName())) {
+                client.add(buildToolCallDto(call, ExecTarget.CLIENT, arguments));
+            } else {
+                client.add(buildToolCallDto(call, ExecTarget.CLIENT, arguments));
+            }
+        }
+        return new ToolCallSplit(client, server);
+    }
+
+    private ToolCallDTO buildToolCallDto(ToolCall call, ExecTarget target, Map<String, Object> arguments) {
+        ToolCallDTO dto = new ToolCallDTO();
+        dto.setId(call.getId());
+        dto.setName(call.getName());
+        dto.setArguments(arguments == null ? Map.of() : new LinkedHashMap<>(arguments));
+        dto.setExecTarget(target);
+        return dto;
+    }
+
+    private Map<String, Object> parseArguments(ToolCall call) {
+        if (call == null || call.getArgumentsJson() == null || call.getArgumentsJson().isBlank()) {
+            return Map.of();
+        }
+        try {
+            return mapper.readValue(call.getArgumentsJson(), MAP_TYPE);
+        } catch (Exception ex) {
+            log.warn("Failed to parse tool arguments for {}: {}", call.getName(), ex.getMessage());
+            return Map.of();
+        }
+    }
+
+    private String toNdjson(Object value) {
+        try {
+            return mapper.writeValueAsString(value) + "\n";
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize NDJSON payload", e);
+            return "{\"event\":\"error\",\"data\":{\"message\":\"serialization failed\"}}\n";
+        }
+    }
+
+    private NdjsonEvent progressEvent(String stage) {
+        return NdjsonEvent.builder()
+                .event("progress")
+                .ts(now())
+                .data(Map.of("stage", stage))
+                .build();
+    }
+
+    private NdjsonEvent errorEvent(String message) {
+        return NdjsonEvent.builder()
+                .event("error")
+                .ts(now())
+                .data(Map.of("message", message))
+                .build();
+    }
+
+    private void emitStep(FluxSink<String> sink, StepState state) {
+        OrchestrationStep step = OrchestrationStep.builder()
+                .stepId(state.stepId)
+                .finished(state.finished)
+                .remainingLoops(state.remainingLoops)
+                .context(buildContextSummary(state.conversation))
+                .serverResults(new ArrayList<>(state.serverResults))
+                .pendingClientCalls(new ArrayList<>(state.pendingClientCalls))
+                .assistant_summary(Optional.ofNullable(state.assistantSummary).orElse(""))
+                .finalAnswer(state.finalAnswer)
+                .error(state.error)
+                .build();
+        sink.next(toNdjson(NdjsonEvent.builder()
+                .event("step")
+                .ts(now())
+                .data(convertToMap(step))
+                .build()));
+    }
+
+    private void handleStepError(FluxSink<String> sink, StepState state, Throwable error) {
+        String message = Optional.ofNullable(error.getMessage()).orElse("Internal error");
+        log.error("orchestrateStepNdjson failed", error);
+        sink.next(toNdjson(errorEvent(message)));
+        state.error = message;
+        state.finished = true;
+        state.remainingLoops = 0;
+        if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+            state.assistantSummary = "发生错误，流程结束";
+        }
+        emitStep(sink, state);
+    }
+
+    private Map<String, Object> convertToMap(Object value) {
+        try {
+            return mapper.convertValue(value, MAP_TYPE);
+        } catch (IllegalArgumentException ex) {
+            log.warn("convertToMap failed for NDJSON payload", ex);
+            return Map.of("error", "serialization");
+        }
+    }
+
+    private OrchestrationStep.Context buildContextSummary(List<Map<String, Object>> conversation) {
+        if (conversation == null || conversation.isEmpty()) {
+            return OrchestrationStep.Context.builder()
+                    .messages(List.of())
+                    .build();
+        }
+        int limit = Math.min(resolveMemoryWindow(12), conversation.size());
+        int start = Math.max(0, conversation.size() - limit);
+        List<Map<String, Object>> summary = new ArrayList<>();
+        for (int i = start; i < conversation.size(); i++) {
+            Map<String, Object> msg = conversation.get(i);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("role", Objects.toString(msg.get("role"), "assistant"));
+            Object content = msg.get("content");
+            entry.put("content", content == null ? "" : content.toString());
+            summary.add(entry);
+        }
+        return OrchestrationStep.Context.builder()
+                .messages(summary)
+                .build();
+    }
+
+    private Map<String, Object> toToolMessage(ToolResultDTO result) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("role", "tool");
+        if (result.getTool_call_id() != null) {
+            message.put("tool_call_id", result.getTool_call_id());
+        }
+        if (result.getName() != null) {
+            message.put("name", result.getName());
+        }
+        message.put("content", Optional.ofNullable(result.getContent()).orElse(""));
+        return message;
+    }
+
+    private Set<String> extractClientToolNames(List<Map<String, Object>> clientTools) {
+        if (clientTools == null || clientTools.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<String> names = new HashSet<>();
+        for (Map<String, Object> tool : clientTools) {
+            if (tool == null) {
+                continue;
+            }
+            Object functionObj = tool.get("function");
+            if (functionObj instanceof Map<?, ?> functionMap) {
+                Object name = ((Map<?, ?>) functionMap).get("name");
+                if (name != null) {
+                    names.add(name.toString());
+                }
+            }
+        }
+        return Collections.unmodifiableSet(names);
+    }
+
+    private List<Map<String, Object>> mergeToolSchemas(List<Map<String, Object>> serverTools,
+                                                       List<Map<String, Object>> clientTools) {
+        Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
+        if (serverTools != null) {
+            for (Map<String, Object> tool : serverTools) {
+                String name = extractFunctionName(tool);
+                if (name != null) {
+                    merged.putIfAbsent(name, tool);
+                }
+            }
+        }
+        if (clientTools != null) {
+            for (Map<String, Object> tool : clientTools) {
+                String name = extractFunctionName(tool);
+                if (name != null) {
+                    merged.put(name, tool);
+                }
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private String extractFunctionName(Map<String, Object> tool) {
+        if (tool == null) {
+            return null;
+        }
+        Object functionObj = tool.get("function");
+        if (functionObj instanceof Map<?, ?> functionMap) {
+            Object name = ((Map<?, ?>) functionMap).get("name");
+            return name != null ? name.toString() : null;
+        }
+        return null;
+    }
+
+    private String now() {
+        return OffsetDateTime.now().toString();
+    }
+
+    private class StepState {
+        private final V2StepNdjsonRequest request;
+        private final String stepId = "step-" + UUID.randomUUID();
+        private final String userId;
+        private final String conversationId;
+        private final boolean hasUserPrompt;
+        private final boolean hasClientResults;
+        private final List<ToolResultDTO> clientResults;
+        private final List<Map<String, Object>> clientTools;
+        private final Set<String> clientToolNames;
+        private final List<Map<String, Object>> serverToolSchemas;
+        private final List<Map<String, Object>> mergedTools;
+        private final List<Map<String, Object>> conversation = new ArrayList<>();
+        private final List<Map<String, Object>> clientResultMessages;
+        private final List<ToolResultDTO> serverResults = new ArrayList<>();
+        private final List<ToolCallDTO> pendingClientCalls = new ArrayList<>();
+        private boolean clientResultsAppended;
+        private Disposable heartbeat;
+        private boolean finished;
+        private Integer remainingLoops;
+        private String assistantSummary;
+        private String finalAnswer;
+        private String error;
+
+        StepState(V2StepNdjsonRequest request) {
+            this.request = request;
+            this.userId = request.getUserId();
+            this.conversationId = request.getConversationId();
+            this.hasUserPrompt = request.getQ() != null && !request.getQ().isBlank();
+            this.clientResults = request.getClientResults() == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(request.getClientResults());
+            this.hasClientResults = !this.clientResults.isEmpty();
+            this.clientTools = request.getClientTools() == null
+                    ? List.of()
+                    : new ArrayList<>(request.getClientTools());
+            this.clientToolNames = extractClientToolNames(this.clientTools);
+            this.serverToolSchemas = toolRegistry.openAiServerToolsSchema();
+            this.mergedTools = mergeToolSchemas(this.serverToolSchemas, this.clientTools);
+            this.clientResultMessages = this.clientResults.stream()
+                    .map(AiServiceImpl.this::toToolMessage)
+                    .collect(Collectors.toCollection(ArrayList::new));
+            buildInitialConversation();
+        }
+
+        private void buildInitialConversation() {
+            conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
+            if (userId != null && conversationId != null) {
+                List<Map<String, Object>> history = limitWindow(
+                        memoryService.getHistory(userId, conversationId),
+                        resolveMemoryWindow(MAX_TOOL_LIMIT)
+                );
+                conversation.addAll(history);
+            }
+            if (hasUserPrompt) {
+                conversation.add(createMessage("user", request.getQ()));
+            }
+        }
+
+        Map<String, Object> startedData() {
+            Map<String, Object> data = new LinkedHashMap<>();
+            if (userId != null) {
+                data.put("userId", userId);
+            }
+            if (conversationId != null) {
+                data.put("conversationId", conversationId);
+            }
+            data.put("hasQ", hasUserPrompt);
+            data.put("hasClientResults", hasClientResults);
+            if (request.getToolChoice() != null) {
+                data.put("toolChoice", request.getToolChoice());
+            }
+            return data;
+        }
+
+        boolean hasIdentifiers() {
+            return userId != null && conversationId != null;
+        }
+
+        void appendClientResults() {
+            if (!clientResultsAppended && !clientResultMessages.isEmpty()) {
+                conversation.addAll(clientResultMessages);
+                clientResultsAppended = true;
+            }
+        }
+    }
+
+    private record DecisionPayload(ModelDecision decision, String rawResponse, String assistantSummary) {}
+
+    private record ServerExecutionResult(List<Map<String, Object>> messages, List<ToolResultDTO> results) {}
+
+    private record ToolCallSplit(List<ToolCallDTO> client, List<ToolCallDTO> server) {}
 
     // 小工具：读取 boolean 开关
     private static boolean getBool(@Nullable Map<String, Object> map, String key, boolean defVal) {

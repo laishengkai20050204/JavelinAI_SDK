@@ -1,5 +1,6 @@
 package com.example.service;
 
+import com.example.service.impl.dto.V2StepNdjsonRequest;
 import org.springframework.lang.Nullable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -34,4 +35,6 @@ public interface AiService {
                                        String prompt,
                                        @org.springframework.lang.Nullable String toolChoice,
                                        @org.springframework.lang.Nullable Map<String, Object> options);
+
+    Flux<String> orchestrateStepNdjson(V2StepNdjsonRequest req);
 }

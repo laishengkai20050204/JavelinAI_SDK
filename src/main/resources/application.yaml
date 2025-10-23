@@ -1,5 +1,7 @@
 server:
   port: 8080
+  http2:
+    enabled: true
 
 ai:
   compatibility: OPENAI
@@ -9,6 +11,8 @@ ai:
   model: qwen3:8b
   api-key: ${AI_API_KEY:}
   auth-scheme: Bearer
+  stepjson:
+    heartbeat-seconds: 5       # NDJSON heartbeat interval (seconds)
   think:
     enabled: true               # enable optional thinking mode
 #    level: medium               # optional: send low/medium/high when the upstream supports it

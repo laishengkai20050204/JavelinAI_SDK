@@ -58,4 +58,23 @@ public class ToolRegistry {
                 ))
                 .toList();
     }
+
+    public List<Map<String, Object>> openAiServerToolsSchema() {
+        log.debug("Generating OpenAI server tool schema for {} tool(s)", tools.size());
+        return tools.values().stream()
+                .map(tool -> Map.<String, Object>of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", tool.name(),
+                                "description", tool.description(),
+                                "parameters", tool.openAiJsonSchema(),
+                                "x-execTarget", "server"
+                        )
+                ))
+                .toList();
+    }
+
+    public boolean isServerTool(String name) {
+        return get(name).isPresent();
+    }
 }

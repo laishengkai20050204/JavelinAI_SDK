@@ -1,6 +1,8 @@
 package com.example.controller;
 
 import com.example.service.AiService;
+import com.example.service.impl.dto.NdjsonEvent;
+import com.example.service.impl.dto.V2StepNdjsonRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -24,6 +26,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 @Tag(name = "AI Chat")
 @RestController
 @RequestMapping("/ai")
@@ -31,6 +36,7 @@ import java.util.Map;
 @Slf4j
 public class ChatController {
     private final AiService aiService;
+    private final ObjectMapper mapper;
 
     @Operation(summary = "Chat once (non streaming)")
     @GetMapping("/chat")
@@ -190,4 +196,30 @@ public class ChatController {
                 .doOnError(err -> log.error("v2 chat stream failed", err));
     }
 
+    @PostMapping(value = "/v2/chat/step/ndjson", produces = "application/x-ndjson")
+    @Operation(summary = "v2 Orchestration (step-json, NDJSON heartbeat)",
+            description = "服务端仅执行SERVER工具；CLIENT调用返回给前端执行；全程 NDJSON 心跳与阶段事件。")
+    public Flux<String> orchestratedStepNdjson(@RequestBody V2StepNdjsonRequest payload) {
+        if (payload == null || payload.getResponseMode() == null
+                || !"step-json-ndjson".equalsIgnoreCase(payload.getResponseMode())) {
+            return Flux.just(toNdjson(NdjsonEvent.builder()
+                    .event("error")
+                    .ts(now())
+                    .data(Map.of("message", "responseMode must be 'step-json-ndjson'"))
+                    .build()));
+        }
+        return aiService.orchestrateStepNdjson(payload);
+    }
+
+    private String toNdjson(Object payload) {
+        try {
+            return mapper.writeValueAsString(payload) + "\n";
+        } catch (JsonProcessingException e) {
+            return "{\"event\":\"error\",\"data\":{\"message\":\"serialization failed\"}}\n";
+        }
+    }
+
+    private String now() {
+        return java.time.OffsetDateTime.now().toString();
+    }
 }
