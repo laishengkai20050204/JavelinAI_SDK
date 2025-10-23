@@ -44,6 +44,7 @@ import java.util.UUID;
 public class AiServiceImpl implements AiService {
 
     private static final Set<String> SUPPORTED_THINK_LEVELS = Set.of("low", "medium", "high");
+    private static final Set<String> SUPPORTED_TOOL_CHOICES = Set.of("auto", "none", "required");
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<ServerSentEvent<String>>() {};
 
@@ -161,7 +162,7 @@ public class AiServiceImpl implements AiService {
                 .doOnNext(event -> log.trace("chatStream SSE event: {}", event))
                 .map(ServerSentEvent::data)
                 .map(this::trimToNull)
-                .filter(text -> text != null && !text.isEmpty())
+                .filter(Objects::nonNull)
                 .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data))
                 .map(this::extractDeltaSafely)
                 .filter(text -> text != null && !text.isEmpty())
@@ -175,7 +176,7 @@ public class AiServiceImpl implements AiService {
     public Mono<String> chatWithMemoryAsync(String userId, String conversationId, String userMessage) {
         log.debug("chatWithMemoryAsync invoked userId={} conversationId={} userMessageLength={}",
                 userId, conversationId, userMessage != null ? userMessage.length() : 0);
-        int window = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+        int window = resolveMemoryWindow(MAX_TOOL_LIMIT);
         List<Map<String, Object>> relevant = memoryService.findRelevant(
                 userId,
                 conversationId,
@@ -195,7 +196,7 @@ public class AiServiceImpl implements AiService {
                     conversation.size(), userId, conversationId);
         }
 
-        Map<String, Object> userEntry = message("user", userMessage);
+        Map<String, Object> userEntry = createMessage("user", userMessage);
         conversation.add(userEntry);
 
         return chatOnceCore(conversation)
@@ -203,7 +204,7 @@ public class AiServiceImpl implements AiService {
                 .doOnNext(reply -> memoryService.appendMessages(
                         userId,
                         conversationId,
-                        List.of(userEntry, message("assistant", reply))
+                        List.of(userEntry, createMessage("assistant", reply))
                 ))
                 .doOnSuccess(reply -> log.debug("chatWithMemoryAsync completed userId={} conversationId={} responseLength={}",
                         userId, conversationId, reply != null ? reply.length() : 0))
@@ -215,7 +216,7 @@ public class AiServiceImpl implements AiService {
     public Mono<List<Map<String, Object>>> findRelevantMemoryAsync(String userId, String conversationId, String query, int limit) {
         log.debug("findRelevantMemoryAsync invoked userId={} conversationId={} query='{}' limit={}",
                 userId, conversationId, query, limit);
-        int safeLimit = limit > 0 ? limit : Math.max(1, configuredMemoryWindow);
+        int safeLimit = positiveOrFallback(limit, configuredMemoryWindow);
         return Mono.fromCallable(() -> {
                     List<Map<String, Object>> results = new ArrayList<>(
                             memoryService.findRelevant(userId, conversationId, query, safeLimit)
@@ -234,16 +235,16 @@ public class AiServiceImpl implements AiService {
                 userId, conversationId, toolChoice, prompt != null ? prompt.length() : 0);
         String normalizedChoice = normalizeToolChoice(toolChoice);
         log.debug("orchestrateChat normalized toolChoice={}", normalizedChoice);
-        int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+        int historyWindow = resolveMemoryWindow(MAX_TOOL_LIMIT);
 
         List<Map<String, Object>> history = limitWindow(
                 memoryService.getHistory(userId, conversationId),
                 historyWindow
         );
-        Map<String, Object> userMessage = msg("user", prompt);
+        Map<String, Object> userMessage = createMessage("user", prompt);
 
         List<Map<String, Object>> conversation = new ArrayList<>();
-        conversation.add(msg("system", SYSTEM_PROMPT_CORE));
+        conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
         conversation.addAll(history);
         conversation.add(userMessage);
 
@@ -268,7 +269,7 @@ public class AiServiceImpl implements AiService {
         return orchestration.flatMap(answer -> Mono.fromRunnable(() -> memoryService.appendMessages(
                                 userId,
                                 conversationId,
-                                List.of(msg("user", prompt), msg("assistant", answer))
+                                List.of(createMessage("user", prompt), createMessage("assistant", answer))
                         ))
                         .thenReturn(answer))
                 .doOnSuccess(answer -> log.debug("orchestrateChat completed userId={} conversationId={} toolChoice={} responseLength={}",
@@ -420,7 +421,7 @@ public class AiServiceImpl implements AiService {
             args.put("userId", userId);
             args.put("conversationId", conversationId);
             args.put("query", prompt);
-            args.put("maxMessages", configuredMemoryWindow > 0 ? configuredMemoryWindow : 12);
+            args.put("maxMessages", resolveMemoryWindow(12));
             String argsJson = mapper.writeValueAsString(args);
             ToolCall call = new ToolCall("forced-" + UUID.randomUUID(), "find_relevant_memory", argsJson);
             return new ModelDecision(List.of(call), false);
@@ -436,7 +437,7 @@ public class AiServiceImpl implements AiService {
             return "auto";
         }
         String normalized = toolChoice.trim().toLowerCase(Locale.ROOT);
-        if (!Set.of("auto", "none", "required").contains(normalized)) {
+        if (!SUPPORTED_TOOL_CHOICES.contains(normalized)) {
             log.warn("Unsupported tool_choice '{}' received - defaulting to auto", toolChoice);
             return "auto";
         }
@@ -445,7 +446,7 @@ public class AiServiceImpl implements AiService {
 
     private Mono<ModelDecision> decideToolUse(String userId, String conversationId, String prompt) {
         try {
-            int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+            int historyWindow = resolveMemoryWindow(MAX_TOOL_LIMIT);
             List<Map<String, Object>> history = limitWindow(
                     memoryService.getHistory(userId, conversationId),
                     historyWindow
@@ -453,12 +454,12 @@ public class AiServiceImpl implements AiService {
 
             List<Map<String, Object>> messages = new ArrayList<>();
             if (compatibility == Compatibility.OPENAI) {
-                messages.add(msg("system", SYSTEM_PROMPT_DECISION));
+                messages.add(createMessage("system", SYSTEM_PROMPT_DECISION));
             } else {
-                messages.add(msg("system", SYSTEM_PROMPT_OLLAMA_PLAN));
+                messages.add(createMessage("system", SYSTEM_PROMPT_OLLAMA_PLAN));
             }
             messages.addAll(history);
-            messages.add(msg("user", prompt));
+            messages.add(createMessage("user", prompt));
 
             if (compatibility == Compatibility.OPENAI) {
                 Map<String, Object> payload = new HashMap<>();
@@ -525,9 +526,7 @@ public class AiServiceImpl implements AiService {
         log.info("Executing {} tool call(s)", calls.size());
         responses.add(toolExecutor.toAssistantToolCallsMessage(calls));
 
-        int fallbackWindow = configuredMemoryWindow > 0
-                ? Math.min(Math.max(configuredMemoryWindow, 1), MAX_TOOL_LIMIT)
-                : 12;
+        int fallbackWindow = Math.min(resolveMemoryWindow(12), MAX_TOOL_LIMIT);
 
         Map<String, Object> fallbackArgs = new HashMap<>();
         fallbackArgs.put("userId", userId);
@@ -568,7 +567,7 @@ public class AiServiceImpl implements AiService {
         }
 
         List<Map<String, Object>> enriched = new ArrayList<>(messages);
-        enriched.add(msg("system", SYSTEM_PROMPT_OLLAMA_FINAL));
+        enriched.add(createMessage("system", SYSTEM_PROMPT_OLLAMA_FINAL));
 
         Map<String, Object> body = buildRequestBody(enriched, false);
 
@@ -592,13 +591,6 @@ public class AiServiceImpl implements AiService {
                     }
                     return Mono.just(extractContentSafely(json));
                 });
-    }
-
-    private Map<String, Object> msg(String role, String content) {
-        Map<String, Object> map = new HashMap<>();
-        map.put("role", role);
-        map.put("content", content);
-        return map;
     }
 
     private @Nullable ModelDecision parseDecision(String json) {
@@ -821,12 +813,10 @@ public class AiServiceImpl implements AiService {
     }
 
     private List<Map<String, Object>> buildSingleUserMessage(String userMessage) {
-        List<Map<String, Object>> messages = new ArrayList<>();
-        messages.add(message("user", userMessage));
-        return messages;
+        return List.of(createMessage("user", userMessage));
     }
 
-    private Map<String, Object> message(String role, String content) {
+    private Map<String, Object> createMessage(String role, String content) {
         return Map.of("role", role, "content", content);
     }
 
@@ -908,12 +898,21 @@ public class AiServiceImpl implements AiService {
         return Duration.ofMillis(millis);
     }
 
-    private String trimToNull(Object value) {
+    private @Nullable String trimToNull(Object value) {
         if (value == null) {
-            return "";
+            return null;
         }
         String trimmed = value.toString().trim();
-        return trimmed;
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private int resolveMemoryWindow(int fallback) {
+        return positiveOrFallback(configuredMemoryWindow, fallback);
+    }
+
+    private int positiveOrFallback(int value, int fallback) {
+        int candidate = value > 0 ? value : fallback;
+        return Math.max(1, candidate);
     }
 
     private Retry retrySpec() {
@@ -1074,7 +1073,7 @@ public class AiServiceImpl implements AiService {
                 .doOnNext(event -> log.trace("callChatCompletionsStream SSE event: {}", event))
                 .map(ServerSentEvent::data)
                 .map(this::trimToNull)
-                .filter(text -> text != null && !text.isEmpty())
+                .filter(Objects::nonNull)
                 .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data));
 
         Flux<String> processed = rawStream
@@ -1352,7 +1351,7 @@ public class AiServiceImpl implements AiService {
         boolean mergeFinal = getBool(options, "_merge_final", false);
         boolean rawStream  = getBool(options, "_raw_stream", !deltaText && !mergeFinal);
 
-        int historyWindow = configuredMemoryWindow > 0 ? configuredMemoryWindow : MAX_TOOL_LIMIT;
+        int historyWindow = resolveMemoryWindow(MAX_TOOL_LIMIT);
         List<Map<String, Object>> history = limitWindow(
                 memoryService.getHistory(userId, conversationId),
                 historyWindow
@@ -1360,9 +1359,9 @@ public class AiServiceImpl implements AiService {
 
         // 对话骨架（和 v2 非流式一致）
         List<Map<String, Object>> conversation = new ArrayList<>();
-        conversation.add(msg("system", SYSTEM_PROMPT_CORE));
+        conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
         conversation.addAll(history);
-        Map<String, Object> userMsg = msg("user", prompt);
+        Map<String, Object> userMsg = createMessage("user", prompt);
         conversation.add(userMsg);
 
         // 先跑决策（非流式），决定是否用工具
@@ -1427,7 +1426,7 @@ public class AiServiceImpl implements AiService {
                     .doOnComplete(() -> {
                         try {
                             memoryService.appendMessages(userId, conversationId,
-                                    List.of(userMsg, msg("assistant", finalText.toString())));
+                                    List.of(userMsg, createMessage("assistant", finalText.toString())));
                         } catch (Exception e) {
                             log.warn("Failed to append messages to memory after v2 stream", e);
                         }
