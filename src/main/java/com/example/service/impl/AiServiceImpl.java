@@ -26,6 +26,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
@@ -1097,6 +1098,193 @@ public class AiServiceImpl implements AiService {
         }
     }
 
+    private static final class DecisionStreamResult {
+        private final Flux<String> frames;
+        private final Mono<ModelDecision> decision;
+
+        DecisionStreamResult(Flux<String> frames, Mono<ModelDecision> decision) {
+            this.frames = frames;
+            this.decision = decision;
+        }
+
+        Flux<String> frames() {
+            return frames;
+        }
+
+        Mono<ModelDecision> decision() {
+            return decision;
+        }
+    }
+
+    private DecisionStreamResult streamToolDecision(String userId,
+                                                    String conversationId,
+                                                    String prompt,
+                                                    List<Map<String, Object>> history) {
+        try {
+            List<Map<String, Object>> messages = new ArrayList<>();
+            if (compatibility == Compatibility.OPENAI) {
+                messages.add(createMessage("system", SYSTEM_PROMPT_DECISION));
+            } else {
+                messages.add(createMessage("system", SYSTEM_PROMPT_OLLAMA_PLAN));
+            }
+            messages.addAll(history);
+            messages.add(createMessage("user", prompt));
+
+            Map<String, Object> payload;
+            if (compatibility == Compatibility.OPENAI) {
+                payload = new HashMap<>();
+                payload.put("model", model);
+                payload.put("messages", messages);
+                List<Map<String, Object>> schemas = toolRegistry.openAiToolsSchema();
+                if (!schemas.isEmpty()) {
+                    payload.put("tools", schemas);
+                    payload.put("tool_choice", "auto");
+                } else {
+                    payload.put("tool_choice", "none");
+                }
+            } else {
+                payload = new HashMap<>(buildRequestBody(messages, true));
+            }
+
+            Sinks.Many<String> sink = Sinks.many().replay().limit(64);
+
+            Mono<List<String>> chunkList = callChatCompletionsStream(payload, true)
+                    .doOnSubscribe(s -> log.debug("Streaming tool decision started userId={} conversationId={}", userId, conversationId))
+                    .doOnNext(chunk -> {
+                        if (chunk == null) {
+                            return;
+                        }
+                        Sinks.EmitResult result = sink.tryEmitNext(chunk);
+                        if (result.isFailure() && result != Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER) {
+                            log.trace("Decision stream emit result={} chunkLength={}", result, chunk.length());
+                        }
+                    })
+                    .collectList()
+                    .doOnSuccess(list -> {
+                        sink.tryEmitComplete();
+                        log.debug("Decision stream completed userId={} conversationId={} chunkCount={}",
+                                userId, conversationId, list != null ? list.size() : 0);
+                    });
+
+            Mono<ModelDecision> decisionMono = chunkList
+                    .map(this::mergeDecisionChunks)
+                    .map(this::parseDecision)
+                    .defaultIfEmpty(ModelDecision.finalOnly())
+                    .onErrorResume(error -> {
+                        log.warn("Decision stream failed userId={} conversationId={}", userId, conversationId, error);
+                        emitDecisionError(sink, error);
+                        return Mono.just(ModelDecision.finalOnly());
+                    })
+                    .cache();
+
+            Flux<String> frames = sink.asFlux()
+                    .doOnSubscribe(s -> log.debug("Subscribed to decision frames userId={} conversationId={}", userId, conversationId));
+
+            return new DecisionStreamResult(frames, decisionMono);
+        } catch (Exception ex) {
+            log.warn("Exception building decision stream userId={} conversationId={}", userId, conversationId, ex);
+            return new DecisionStreamResult(Flux.empty(), Mono.just(ModelDecision.finalOnly()));
+        }
+    }
+
+    private String mergeDecisionChunks(List<String> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return "";
+        }
+
+        if (compatibility == Compatibility.OPENAI) {
+            StreamAccumulator accumulator = new StreamAccumulator();
+            for (String chunk : chunks) {
+                if (chunk == null || chunk.isBlank()) {
+                    continue;
+                }
+                try {
+                    accumulator.applyChunk(mapper, chunk);
+                } catch (Exception e) {
+                    log.debug("Failed to merge decision chunk, appending fallback", e);
+                    accumulator.appendFallbackText(chunk);
+                }
+            }
+            try {
+                return accumulator.toOpenAIStyleJson(mapper);
+            } catch (Exception e) {
+                log.warn("Failed to build OpenAI-style decision JSON, falling back", e);
+                return accumulator.fallbackAsSimpleJson(mapper);
+            }
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (String chunk : chunks) {
+            if (chunk == null || chunk.isBlank()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(chunk);
+        }
+        return builder.toString();
+    }
+
+    private String buildDecisionChunkEvent(@Nullable String rawChunk) {
+        try {
+            ObjectNode envelope = mapper.createObjectNode();
+            envelope.put("stage", "decision");
+            envelope.put("type", "chunk");
+            if (rawChunk == null || rawChunk.isBlank()) {
+                envelope.putNull("data");
+            } else {
+                envelope.set("data", mapper.readTree(rawChunk));
+            }
+            return mapper.writeValueAsString(envelope);
+        } catch (Exception e) {
+            ObjectNode envelope = mapper.createObjectNode();
+            envelope.put("stage", "decision");
+            envelope.put("type", "chunk");
+            envelope.put("raw", rawChunk == null ? "" : rawChunk);
+            return envelope.toString();
+        }
+    }
+
+    private String buildDecisionHeartbeat(long counter) {
+        try {
+            ObjectNode envelope = mapper.createObjectNode();
+            envelope.put("stage", "decision");
+            envelope.put("type", "heartbeat");
+            envelope.put("count", counter);
+            envelope.put("timestamp", System.currentTimeMillis());
+            return mapper.writeValueAsString(envelope);
+        } catch (Exception e) {
+            return "{\"stage\":\"decision\",\"type\":\"heartbeat\",\"count\":" + counter + "}";
+        }
+    }
+
+    private String buildDecisionErrorEvent(@Nullable String message) {
+        String effective = (message == null || message.isBlank()) ? "decision stream failed" : message;
+        try {
+            ObjectNode envelope = mapper.createObjectNode();
+            envelope.put("stage", "decision");
+            envelope.put("type", "error");
+            envelope.put("message", effective);
+            return mapper.writeValueAsString(envelope);
+        } catch (Exception e) {
+            String safe = effective.replace("\"", "'");
+            return "{\"stage\":\"decision\",\"type\":\"error\",\"message\":\"" + safe + "\"}";
+        }
+    }
+
+    private void emitDecisionError(Sinks.Many<String> sink, Throwable error) {
+        String payload = buildDecisionErrorEvent(error != null ? error.getMessage() : null);
+        Sinks.EmitResult result = sink.tryEmitNext(payload);
+        if (result.isFailure()) {
+            log.debug("Decision error emit result={}", result);
+        }
+        Sinks.EmitResult completion = sink.tryEmitComplete();
+        if (completion.isFailure()) {
+            log.trace("Decision stream completion emit result={}", completion);
+        }
+    }
+
     // ================== Streaming 合并累加器 ==================
     /**
      * 把 OpenAI 风格的流式 delta（choices[].delta.*）合并成一次性 JSON。
@@ -1364,14 +1552,25 @@ public class AiServiceImpl implements AiService {
         Map<String, Object> userMsg = createMessage("user", prompt);
         conversation.add(userMsg);
 
-        // 先跑决策（非流式），决定是否用工具
-        Mono<ModelDecision> decisionMono = decideToolUse(userId, conversationId, prompt);
+        // 启动工具决策流，实时向前端推送规划片段
+        DecisionStreamResult decisionStream = streamToolDecision(userId, conversationId, prompt, history);
+        Mono<ModelDecision> decisionMono = decisionStream.decision();
 
-        return decisionMono.flatMapMany(decision -> {
+        Flux<String> planningEvents = decisionStream.frames()
+                .map(this::buildDecisionChunkEvent)
+                .onErrorResume(err -> {
+                    log.warn("Decision frame stream failed userId={} conversationId={}", userId, conversationId, err);
+                    return Flux.just(buildDecisionErrorEvent(err.getMessage()));
+                });
+
+        Flux<String> heartbeat = Flux.interval(Duration.ofSeconds(4))
+                .map(this::buildDecisionHeartbeat)
+                .takeUntilOther(decisionMono.then());
+
+        Flux<String> finalFlux = decisionMono.flatMapMany(decision -> {
             List<Map<String, Object>> updated = new ArrayList<>(conversation);
 
             if (decision != null && decision.hasToolCalls()) {
-                // 有工具：执行后把 tool calls + tool results 注入消息
                 try {
                     List<Map<String, Object>> toolMsgs = runToolsAndBuildMessages(decision, userId, conversationId, prompt);
                     updated.addAll(toolMsgs);
@@ -1379,7 +1578,6 @@ public class AiServiceImpl implements AiService {
                     log.warn("Tool execution failed during v2 stream; fallback to no tools", e);
                 }
             } else if ("required".equals(normalizedChoice)) {
-                // 必须至少跑一次：强制 memory 工具
                 ModelDecision forced = buildForcedDecision(userId, conversationId, prompt);
                 try {
                     List<Map<String, Object>> toolMsgs = runToolsAndBuildMessages(forced, userId, conversationId, prompt);
@@ -1389,25 +1587,21 @@ public class AiServiceImpl implements AiService {
                 }
             }
 
-            // 收尾：用现有 continue 的流式方法，把 flags 透传进去
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", model);
             payload.put("messages", updated);
-            payload.put("tool_choice", "none"); // 收尾阶段默认不再触发工具；如需允许，设 "auto"
+            payload.put("tool_choice", "none");
             if (deltaText)  payload.put("_delta_text", true);
             if (mergeFinal) payload.put("_merge_final", true);
             if (!deltaText && !mergeFinal) payload.put("_raw_stream", rawStream);
 
-            // 为写入记忆做个简单聚合（能聚再写；raw 透传时若无法解析则写空/跳过）
             StringBuilder finalText = new StringBuilder();
 
             Flux<String> stream = continueAfterToolsStreamAsync(payload)
                     .doOnNext(chunk -> {
                         if (deltaText) {
-                            // 纯文本增量：直接累计
                             finalText.append(chunk);
                         } else if (mergeFinal) {
-                            // 末尾会有一帧合并后的完整 JSON，尝试只在末尾解析
                             try {
                                 JsonNode root = mapper.readTree(chunk);
                                 JsonNode msgNode = root.path("choices").path(0).path("message");
@@ -1419,7 +1613,7 @@ public class AiServiceImpl implements AiService {
                                     }
                                 }
                             } catch (Exception ignored) {
-                                // 非合并帧/中途帧，忽略
+                                // ignored: intermediate frames may not be valid JSON
                             }
                         }
                     })
@@ -1433,11 +1627,13 @@ public class AiServiceImpl implements AiService {
                     });
 
             return stream;
-        }).onErrorResume(ex -> {
-            log.error("orchestrateChatStream failed userId={} conversationId={}", userId, conversationId, ex);
-            // 出错时返回一段友好的文本流
-            return Flux.just("抱歉，流式会话发生异常，请稍后重试。");
         });
+
+        return Flux.merge(heartbeat, planningEvents, finalFlux)
+                .onErrorResume(ex -> {
+                    log.error("orchestrateChatStream failed userId={} conversationId={}", userId, conversationId, ex);
+                    return Flux.just("抱歉，流式会话发生异常，请稍后重试。");
+                });
     }
 
     // 小工具：读取 boolean 开关
