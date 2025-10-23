@@ -25,6 +25,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -291,23 +292,45 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
             return StringUtils.hasText(str) ? str : null;
         }
         if (value instanceof Map<?, ?> map) {
-            Object content = map.get("content");
-            String candidate = coerceText(content);
+            String candidate = coerceText(map.get("content"));
             if (candidate != null) {
                 return candidate;
             }
-            Object text = map.get("text");
-            candidate = coerceText(text);
+            candidate = coerceText(map.get("message"));
             if (candidate != null) {
                 return candidate;
             }
-            Object valueNode = map.get("value");
-            candidate = coerceText(valueNode);
+            candidate = coerceText(map.get("reasoning"));
             if (candidate != null) {
                 return candidate;
             }
-            for (Object entryValue : map.values()) {
-                candidate = coerceText(entryValue);
+            candidate = coerceText(map.get("delta"));
+            if (candidate != null) {
+                return candidate;
+            }
+            candidate = coerceText(map.get("text"));
+            if (candidate != null) {
+                return candidate;
+            }
+            candidate = coerceText(map.get("value"));
+            if (candidate != null) {
+                return candidate;
+            }
+            candidate = coerceText(map.get("choices"));
+            if (candidate != null) {
+                return candidate;
+            }
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Object key = entry.getKey();
+                if (key instanceof String strKey) {
+                    String lower = strKey.toLowerCase(Locale.ROOT);
+                    if (lower.equals("id") || lower.equals("object") || lower.equals("model")
+                            || lower.equals("system_fingerprint") || lower.equals("created")
+                            || lower.equals("finish_reason") || lower.equals("index")) {
+                        continue;
+                    }
+                }
+                candidate = coerceText(entry.getValue());
                 if (candidate != null) {
                     return candidate;
                 }

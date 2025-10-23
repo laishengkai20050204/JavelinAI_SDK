@@ -1456,6 +1456,24 @@ public class AiServiceImpl implements AiService {
             }
         }
 
+        String contentText() {
+            return content.toString();
+        }
+
+        String reasoningText() {
+            return reasoning.toString();
+        }
+
+        String effectiveText() {
+            if (content.length() > 0) {
+                return content.toString();
+            }
+            if (reasoning.length() > 0) {
+                return reasoning.toString();
+            }
+            return "";
+        }
+
         private static String textOrNull(JsonNode node, String field) {
             if (node == null || node.isMissingNode()) return null;
             JsonNode v = node.get(field);
@@ -1617,6 +1635,7 @@ public class AiServiceImpl implements AiService {
             if (!deltaText && !mergeFinal) payload.put("_raw_stream", rawStream);
 
             StringBuilder finalText = new StringBuilder();
+            StreamAccumulator rawAccumulator = (!deltaText && !mergeFinal) ? new StreamAccumulator() : null;
 
             Flux<String> stream = continueAfterToolsStreamAsync(payload)
                     .doOnNext(chunk -> {
@@ -1636,9 +1655,28 @@ public class AiServiceImpl implements AiService {
                             } catch (Exception ignored) {
                                 // ignored: intermediate frames may not be valid JSON
                             }
+                        } else if (rawAccumulator != null) {
+                            try {
+                                rawAccumulator.applyChunk(mapper, chunk);
+                            } catch (Exception e) {
+                                log.debug("Failed to accumulate raw stream chunk", e);
+                            }
                         }
                     })
                     .doOnComplete(() -> {
+                        if (!deltaText && !mergeFinal && rawAccumulator != null) {
+                            String aggregated = rawAccumulator.contentText();
+                            if (aggregated == null || aggregated.isBlank()) {
+                                aggregated = rawAccumulator.reasoningText();
+                            }
+                            if ((aggregated == null || aggregated.isBlank())) {
+                                aggregated = rawAccumulator.effectiveText();
+                            }
+                            if (aggregated != null && !aggregated.isBlank()) {
+                                finalText.setLength(0);
+                                finalText.append(aggregated);
+                            }
+                        }
                         try {
                             appendToMemory(userId, conversationId,
                                     List.of(userMsg, createMessage("assistant", finalText.toString())));
