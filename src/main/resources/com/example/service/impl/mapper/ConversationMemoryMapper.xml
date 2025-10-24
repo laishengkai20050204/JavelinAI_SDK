@@ -92,7 +92,7 @@
     <delete id="deleteDraftsOlderThanHours">
         DELETE FROM conversation_messages
         WHERE state = 'DRAFT'
-          AND created_at < DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
+          AND created_at &lt; DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
     </delete>
 
 </mapper>
