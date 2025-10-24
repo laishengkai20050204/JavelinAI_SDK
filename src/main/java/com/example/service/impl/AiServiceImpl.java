@@ -67,6 +67,8 @@ public class AiServiceImpl implements AiService {
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<ServerSentEvent<String>>() {};
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final String STATE_DRAFT = "DRAFT";
+    private static final String STATE_FINAL = "FINAL";
 
     public enum Compatibility { OLLAMA, OPENAI }
 
@@ -96,6 +98,12 @@ public class AiServiceImpl implements AiService {
 
     @Value("${ai.memory.max-messages:12}")
     private int configuredMemoryWindow;
+
+    @Value("${ai.memory.persistenceMode:draft-and-final}")
+    private String persistenceMode = "draft-and-final";
+
+    @Value("${ai.memory.promoteDraftsOnFinish:true}")
+    private boolean promoteDraftsOnFinish = true;
 
     @Value("${ai.client.timeout-ms:60000}")
     private long clientTimeoutMs;
@@ -2113,6 +2121,9 @@ public class AiServiceImpl implements AiService {
     }
 
     private void emitStep(FluxSink<String> sink, StepState state) {
+        if (!state.finished) {
+            maybePersistStepDraft(state);
+        }
         maybePersistStepMemory(state);
         OrchestrationStep step = OrchestrationStep.builder()
                 .stepId(state.stepId)
@@ -2132,26 +2143,92 @@ public class AiServiceImpl implements AiService {
                 .build()));
     }
 
-    private void maybePersistStepMemory(StepState state) {
-        // Persist the resolved exchange once so NDJSON mode updates conversation memory.
-        if (state.memoryAppended || !state.finished || !state.hasUserPrompt || !state.hasIdentifiers()) {
+    private void maybePersistStepDraft(StepState state) {
+        if (state.draftAppended || !isDraftAndFinalMode() || !state.hasIdentifiers()) {
             return;
         }
-        String question = state.request.getQ();
-        String answer = state.finalAnswer;
-        if (question == null || question.isBlank() || answer == null || answer.isBlank()) {
+        int seq = 1;
+        String stepId = state.stepId;
+        try {
+            if (state.hasUserPrompt && state.request != null) {
+                String question = state.request.getQ();
+                if (question != null && !question.isBlank()) {
+                    memoryService.upsertMessage(
+                            state.userId,
+                            state.conversationId,
+                            "user",
+                            question,
+                            null,
+                            stepId,
+                            seq++,
+                            STATE_DRAFT
+                    );
+                }
+            }
+            if (!state.serverResults.isEmpty()) {
+                for (ToolResultDTO result : state.serverResults) {
+                    memoryService.upsertMessage(
+                            state.userId,
+                            state.conversationId,
+                            "tool",
+                            null,
+                            result.getContent(),
+                            stepId,
+                            seq++,
+                            STATE_DRAFT
+                    );
+                }
+            }
+            state.draftAppended = true;
+        } catch (Exception ex) {
+            log.warn("Failed to append step DRAFT userId={} conversationId={} stepId={}",
+                    state.userId, state.conversationId, stepId, ex);
+        }
+    }
+
+    private void maybePersistStepMemory(StepState state) {
+        if (state.memoryAppended || !state.finished || !state.hasIdentifiers()) {
+            return;
+        }
+        String answer = Optional.ofNullable(state.finalAnswer)
+                .filter(text -> !text.isBlank())
+                .orElseGet(() -> Optional.ofNullable(state.assistantSummary).orElse(""));
+        if (answer.isBlank()) {
             return;
         }
         try {
-            appendToMemory(
+            if (!isDraftAndFinalMode() && state.hasUserPrompt && state.request != null) {
+                String question = state.request.getQ();
+                if (question != null && !question.isBlank()) {
+                    memoryService.upsertMessage(
+                            state.userId,
+                            state.conversationId,
+                            "user",
+                            question,
+                            null,
+                            state.stepId,
+                            1,
+                            STATE_FINAL
+                    );
+                }
+            }
+            memoryService.upsertMessage(
                     state.userId,
                     state.conversationId,
-                    List.of(createMessage("user", question), createMessage("assistant", answer))
+                    "assistant",
+                    answer,
+                    null,
+                    state.stepId,
+                    999,
+                    STATE_FINAL
             );
+            if (isDraftAndFinalMode() && isPromoteDraftsOnFinish()) {
+                memoryService.promoteDraftsToFinal(state.userId, state.conversationId, state.stepId);
+            }
             state.memoryAppended = true;
         } catch (Exception ex) {
-            log.warn("Failed to append step memory userId={} conversationId={}",
-                    state.userId, state.conversationId, ex);
+            log.warn("Failed to append FINAL userId={} conversationId={} stepId={}",
+                    state.userId, state.conversationId, state.stepId, ex);
         }
     }
 
@@ -2270,6 +2347,14 @@ public class AiServiceImpl implements AiService {
         return OffsetDateTime.now().toString();
     }
 
+    private boolean isDraftAndFinalMode() {
+        return persistenceMode == null || "draft-and-final".equalsIgnoreCase(persistenceMode);
+    }
+
+    private boolean isPromoteDraftsOnFinish() {
+        return promoteDraftsOnFinish;
+    }
+
     private class StepState {
         private final V2StepNdjsonRequest request;
         private final String stepId = "step-" + UUID.randomUUID();
@@ -2287,6 +2372,7 @@ public class AiServiceImpl implements AiService {
         private final List<ToolResultDTO> serverResults = new ArrayList<>();
         private final List<ToolCallDTO> pendingClientCalls = new ArrayList<>();
         private boolean clientResultsAppended;
+        private boolean draftAppended;
         private boolean memoryAppended;
         private Disposable heartbeat;
         private boolean finished;
@@ -2319,9 +2405,10 @@ public class AiServiceImpl implements AiService {
         private void buildInitialConversation() {
             conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
             if (userId != null && conversationId != null) {
-                List<Map<String, Object>> history = limitWindow(
-                        memoryService.getHistory(userId, conversationId),
-                        resolveMemoryWindow(MAX_TOOL_LIMIT)
+                List<Map<String, Object>> history = memoryService.getContext(
+                        userId,
+                        conversationId,
+                        resolveMemoryWindow(50)
                 );
                 conversation.addAll(history);
             }

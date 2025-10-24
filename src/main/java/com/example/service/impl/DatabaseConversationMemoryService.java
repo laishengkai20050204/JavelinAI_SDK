@@ -7,7 +7,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -15,12 +14,12 @@ import org.springframework.util.StringUtils;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @ConditionalOnProperty(name = "ai.memory.storage", havingValue = "database")
@@ -47,11 +46,10 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         if (messages == null || messages.isEmpty()) {
             return;
         }
+        String legacyStepId = "legacy-" + UUID.randomUUID();
+        int seq = 1;
         for (Map<String, Object> message : messages) {
-            ConversationMessageEntity entity = toEntity(userId, conversationId, message);
-            mapper.insertMessage(entity);
-            log.trace("Inserted message id={} userId={} conversationId={}",
-                    entity.getId(), userId, conversationId);
+            persistMessage(userId, conversationId, message, legacyStepId, seq++, "FINAL");
         }
     }
 
@@ -74,6 +72,43 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         log.debug("Database relevant fallback returning {} message(s) userId={} conversationId={}",
                 latest.size(), userId, conversationId);
         return toMessageList(latest);
+    }
+
+    @Override
+    public void upsertMessage(String userId, String conversationId,
+                              String role, String content, String payloadJson,
+                              String stepId, int seq, String state) {
+        try {
+            mapper.upsertMessage(userId, conversationId, role, content, payloadJson, null, stepId, seq, state);
+        } catch (Exception ex) {
+            log.warn("Failed to upsert message userId={} conversationId={} stepId={} role={} seq={}",
+                    userId, conversationId, stepId, role, seq, ex);
+            throw ex;
+        }
+    }
+
+    @Override
+    public List<Map<String, Object>> getContext(String userId, String conversationId, int limit) {
+        int safeLimit = Math.max(1, limit);
+        List<Map<String, Object>> rows = mapper.selectContext(userId, conversationId, safeLimit);
+        List<Map<String, Object>> messages = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> message = toMessageMap(toEntity(row));
+            if (!message.isEmpty()) {
+                messages.add(message);
+            }
+        }
+        return messages;
+    }
+
+    @Override
+    public void promoteDraftsToFinal(String userId, String conversationId, String stepId) {
+        mapper.promoteDraftsToFinal(userId, conversationId, stepId);
+    }
+
+    @Override
+    public void deleteDraftsOlderThanHours(int hours) {
+        mapper.deleteDraftsOlderThanHours(hours);
     }
 
     private List<ConversationMessageEntity> searchByContent(String userId,
@@ -101,27 +136,25 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         }
     }
 
-    private ConversationMessageEntity toEntity(String userId,
-                                               String conversationId,
-                                               Map<String, Object> message) {
-        ConversationMessageEntity entity = new ConversationMessageEntity();
-        entity.setUserId(userId);
-        entity.setConversationId(conversationId);
-        entity.setRole(asString(message.get("role")));
-        entity.setContent(extractContent(message));
-
-        String messageTimestamp = extractTimestamp(message);
-        entity.setMessageTimestamp(messageTimestamp);
-        entity.setCreatedAt(resolveCreatedAt(messageTimestamp));
-
+    private void persistMessage(String userId,
+                                String conversationId,
+                                Map<String, Object> message,
+                                String stepId,
+                                int seq,
+                                String state) {
+        Map<String, Object> safeMessage = message == null ? Map.of() : new HashMap<>(message);
+        String role = asString(safeMessage.get("role"));
+        String content = extractContent(safeMessage);
+        String timestamp = extractTimestamp(safeMessage);
+        String payloadJson = null;
         try {
-            entity.setPayload(objectMapper.writeValueAsString(message));
+            payloadJson = objectMapper.writeValueAsString(safeMessage);
         } catch (Exception e) {
             log.warn("Failed to serialize conversation message for userId={} conversationId={}",
                     userId, conversationId, e);
-            entity.setPayload(null);
         }
-        return entity;
+
+        mapper.upsertMessage(userId, conversationId, role, content, payloadJson, timestamp, stepId, seq, state);
     }
 
     private List<Map<String, Object>> toMessageList(List<ConversationMessageEntity> entities) {
@@ -172,7 +205,50 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
             message.put("timestamp", Instant.now().toString());
         }
 
+        if (StringUtils.hasText(entity.getState())) {
+            message.putIfAbsent("state", entity.getState());
+        }
+        if (StringUtils.hasText(entity.getStepId())) {
+            message.putIfAbsent("stepId", entity.getStepId());
+        }
+        if (entity.getSeq() != null) {
+            message.putIfAbsent("seq", entity.getSeq());
+        }
+        if (!message.containsKey("payload") && StringUtils.hasText(entity.getPayload())) {
+            message.put("payload", entity.getPayload());
+        }
+
         return message;
+    }
+
+    private ConversationMessageEntity toEntity(Map<String, Object> row) {
+        if (row == null || row.isEmpty()) {
+            return new ConversationMessageEntity();
+        }
+        ConversationMessageEntity entity = new ConversationMessageEntity();
+        Object id = row.get("id");
+        if (id instanceof Number number) {
+            entity.setId(number.longValue());
+        }
+        entity.setUserId(asString(row.get("user_id")));
+        entity.setConversationId(asString(row.get("conversation_id")));
+        entity.setRole(asString(row.get("role")));
+        entity.setContent(asString(row.get("content")));
+        entity.setPayload(asString(row.get("payload")));
+        entity.setMessageTimestamp(asString(row.get("message_timestamp")));
+        entity.setState(asString(row.get("state")));
+        entity.setStepId(asString(row.get("step_id")));
+        Object seq = row.get("seq");
+        if (seq instanceof Number numberSeq) {
+            entity.setSeq(numberSeq.intValue());
+        }
+        Object created = row.get("created_at");
+        if (created instanceof LocalDateTime localDateTime) {
+            entity.setCreatedAt(localDateTime);
+        } else if (created instanceof java.sql.Timestamp timestamp) {
+            entity.setCreatedAt(timestamp.toLocalDateTime());
+        }
+        return entity;
     }
 
     private String asString(Object value) {
@@ -265,15 +341,4 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         return null;
     }
 
-    private LocalDateTime resolveCreatedAt(String timestamp) {
-        if (StringUtils.hasText(timestamp)) {
-            try {
-                Instant instant = Instant.parse(timestamp);
-                return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
-            } catch (DateTimeParseException ignored) {
-                // fall through
-            }
-        }
-        return LocalDateTime.now(ZoneOffset.UTC);
-    }
 }

@@ -11,11 +11,14 @@
         <result property="content" column="content"/>
         <result property="payload" column="payload"/>
         <result property="messageTimestamp" column="message_timestamp"/>
+        <result property="state" column="state"/>
+        <result property="stepId" column="step_id"/>
+        <result property="seq" column="seq"/>
         <result property="createdAt" column="created_at"/>
     </resultMap>
 
     <sql id="baseColumns">
-        id, user_id, conversation_id, role, content, payload, message_timestamp, created_at
+        id, user_id, conversation_id, role, content, payload, message_timestamp, state, step_id, seq, created_at
     </sql>
 
     <select id="selectHistory" resultMap="ConversationMessageMap">
@@ -23,15 +26,9 @@
         FROM conversation_messages
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
+          AND state = 'FINAL'
         ORDER BY created_at ASC
     </select>
-
-    <insert id="insertMessage" parameterType="com.example.service.impl.entity.ConversationMessageEntity"
-            useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO conversation_messages
-        (user_id, conversation_id, role, content, payload, message_timestamp, created_at)
-        VALUES (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp}, #{createdAt})
-    </insert>
 
     <delete id="deleteConversation">
         DELETE FROM conversation_messages
@@ -45,6 +42,7 @@
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
           AND content LIKE CONCAT('%', #{query}, '%')
+          AND state = 'FINAL'
         ORDER BY created_at DESC
         LIMIT #{limit}
     </select>
@@ -54,8 +52,47 @@
         FROM conversation_messages
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
+          AND state = 'FINAL'
         ORDER BY created_at DESC
         LIMIT #{limit}
     </select>
+
+    <insert id="upsertMessage">
+        INSERT INTO conversation_messages
+        (user_id, conversation_id, role, content, payload, message_timestamp,
+         step_id, seq, state, created_at)
+        VALUES
+        (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp},
+         #{stepId}, #{seq}, #{state}, NOW())
+        ON DUPLICATE KEY UPDATE
+        content = VALUES(content),
+        payload = VALUES(payload)
+    </insert>
+
+    <select id="selectContext" resultType="map">
+        SELECT id, user_id, conversation_id, role, content, payload, message_timestamp,
+               step_id, seq, state, created_at
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND state IN ('DRAFT','FINAL')
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="promoteDraftsToFinal">
+        UPDATE conversation_messages
+        SET state = 'FINAL'
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND step_id = #{stepId}
+          AND state = 'DRAFT'
+    </update>
+
+    <delete id="deleteDraftsOlderThanHours">
+        DELETE FROM conversation_messages
+        WHERE state = 'DRAFT'
+          AND created_at < DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
+    </delete>
 
 </mapper>
