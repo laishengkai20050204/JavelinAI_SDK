@@ -77,4 +77,8 @@ public class ToolRegistry {
     public boolean isServerTool(String name) {
         return get(name).isPresent();
     }
+
+    public List<AiTool> allTools() {
+        return List.copyOf(tools.values());
+    }
 }

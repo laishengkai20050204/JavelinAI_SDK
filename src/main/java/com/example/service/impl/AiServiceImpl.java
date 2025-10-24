@@ -1,5 +1,7 @@
 package com.example.service.impl;
 
+import com.example.ai.SpringAiChatGateway;
+import com.example.config.AiProperties;
 import com.example.service.AiService;
 import com.example.service.ConversationMemoryService;
 import com.example.service.impl.dto.ExecTarget;
@@ -21,16 +23,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatusCode;
-import org.springframework.http.MediaType;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.ClientResponse;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -56,6 +52,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -64,27 +62,28 @@ public class AiServiceImpl implements AiService {
 
     private static final Set<String> SUPPORTED_THINK_LEVELS = Set.of("low", "medium", "high");
     private static final Set<String> SUPPORTED_TOOL_CHOICES = Set.of("auto", "none", "required");
-    private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
-            new ParameterizedTypeReference<ServerSentEvent<String>>() {};
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final String STATE_DRAFT = "DRAFT";
     private static final String STATE_FINAL = "FINAL";
+    private static final Pattern URL_PATTERN = Pattern.compile("(https?://[^\\s]+)", Pattern.CASE_INSENSITIVE);
+    private static final String TRAILING_URL_CHARS = ".,!?)]}>\"'";
+    private static final char FULL_WIDTH_STOP = '\u3002';
 
     public enum Compatibility { OLLAMA, OPENAI }
 
     private static final int MAX_TOOL_LIMIT = 50;
     private static final String SYSTEM_PROMPT_CORE = "You are a helpful assistant who writes concise, accurate answers.";
     private static final String SYSTEM_PROMPT_DECISION = "You decide whether to call the function find_relevant_memory before answering. Only call it when the user references previous context or when recalling history will help.";
-    private static final String SYSTEM_PROMPT_OLLAMA_PLAN = "你是对话编排器。当需要查询历史时，只能输出：\n{\"action\":\"find_relevant_memory\",\"args\":{\"query\":\"...\", \"maxMessages\":12}}\n如果不需要工具，输出：{\"action\":\"final\"}";
-    private static final String SYSTEM_PROMPT_OLLAMA_FINAL = "以上是检索结果和对话，请基于这些内容生成最终回答（只输出答案文本）。";
+    private static final String SYSTEM_PROMPT_OLLAMA_PLAN = "You orchestrate the dialog. When history lookup is required respond with {\"action\":\"find_relevant_memory\",\"args\":{\"query\":\"...\", \"maxMessages\":12}}. Otherwise respond with {\"action\":\"final\"}.";
+    private static final String SYSTEM_PROMPT_OLLAMA_FINAL = "The previous content contains retrieval results and conversation history. Produce the final answer text only.";
 
-    private final WebClient webClient;
+    private final SpringAiChatGateway chatGateway;
     private final ObjectMapper mapper;
     private final ConversationMemoryService memoryService;
     private final ToolRegistry toolRegistry;
     private final AiToolExecutor toolExecutor;
     private final Compatibility compatibility;
-    private final String path;
+    private final AiProperties.Mode aiMode;
     private final String model;
 
     @Value("${ai.think.enabled:false}")
@@ -121,23 +120,23 @@ public class AiServiceImpl implements AiService {
     private long stepJsonHeartbeatSeconds;
 
     public AiServiceImpl(
-            WebClient aiWebClient,
+            SpringAiChatGateway chatGateway,
             ObjectMapper mapper,
             ConversationMemoryService memoryService,
             ToolRegistry toolRegistry,
             AiToolExecutor toolExecutor,
-            @Value("${ai.compatibility}") String compatibility,
-            @Value("${ai.path}") String path,
-            @Value("${ai.model}") String model
+            AiProperties aiProperties
     ) {
-        this.webClient = aiWebClient;
+        this.chatGateway = chatGateway;
         this.mapper = mapper;
         this.memoryService = memoryService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
-        this.compatibility = Compatibility.valueOf(compatibility.toUpperCase());
-        this.path = path;
-        this.model = model;
+        AiProperties.Mode mode = aiProperties.getMode() != null ? aiProperties.getMode() : AiProperties.Mode.OPENAI;
+        this.aiMode = mode;
+        this.compatibility = mode == AiProperties.Mode.OLLAMA ? Compatibility.OLLAMA : Compatibility.OPENAI;
+        this.model = StringUtils.hasText(aiProperties.getModel()) ? aiProperties.getModel() : "gpt-4o-mini";
+        log.info("AI service initialized with mode={} model={}", this.aiMode, this.model);
     }
 
     // ========= synchronous =========
@@ -162,15 +161,7 @@ public class AiServiceImpl implements AiService {
     private Mono<String> chatOnceCore(List<Map<String, Object>> messages) {
         Map<String, Object> body = buildRequestBody(messages, false);
 
-        return webClient.post()
-                .uri(path)
-                .bodyValue(body)
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError,
-                        response -> mapToResponseStatus(response, "Upstream returned 4xx during chat"))
-                .onStatus(HttpStatusCode::is5xxServerError,
-                        response -> mapToResponseStatus(response, "Upstream returned 5xx during chat"))
-                .bodyToMono(String.class)
+        return chatGateway.call(body, aiMode)
                 .timeout(requestTimeout())
                 .retryWhen(retrySpec());
     }
@@ -181,17 +172,9 @@ public class AiServiceImpl implements AiService {
         log.debug("chatStream invoked userMessageLength={}", userMessage != null ? userMessage.length() : 0);
         Map<String, Object> body = buildRequestBody(buildSingleUserMessage(userMessage), true);
 
-        return webClient.post()
-                .uri(path)
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .bodyValue(body)
-                .retrieve()
-                .onStatus(HttpStatusCode::isError,
-                        response -> mapToResponseStatus(response, "Upstream returned an error during stream"))
-                .bodyToFlux(SSE_TYPE)
+        return chatGateway.stream(body, aiMode)
                 .timeout(streamTimeout())
-                .doOnNext(event -> log.trace("chatStream SSE event: {}", event))
-                .map(ServerSentEvent::data)
+                .doOnNext(frame -> log.trace("chatStream frame: {}", frame))
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
                 .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data))
@@ -290,7 +273,7 @@ public class AiServiceImpl implements AiService {
                 null
         ).onErrorResume(ex -> {
             log.warn("Tool orchestration failed, falling back to direct completion", ex);
-            return continueAfterTools(conversation, "none")
+            return continueAfterTools(userId, conversationId, conversation, "none")
                     .onErrorResume(inner -> {
                         log.error("Fallback completion failed", inner);
                         return Mono.just("Sorry, something went wrong.");
@@ -319,13 +302,13 @@ public class AiServiceImpl implements AiService {
                                          @Nullable ModelDecision nextDecision) {
         if ("none".equals(toolChoice)) {
             log.debug("Tool choice 'none' - skipping tool orchestration");
-            return continueAfterTools(currentMessages, "none");
+            return continueAfterTools(userId, conversationId, currentMessages, "none");
         }
 
         int maxLoops = Math.max(1, maxToolLoops);
         if (loopIndex >= maxLoops) {
             log.warn("Reached max tool loops {} - returning without further tools", maxLoops);
-            return continueAfterTools(currentMessages, "none");
+            return continueAfterTools(userId, conversationId, currentMessages, "none");
         }
 
         Mono<ModelDecision> decisionMono = nextDecision != null
@@ -374,7 +357,7 @@ public class AiServiceImpl implements AiService {
                         forced
                 );
             }
-            return continueAfterTools(currentMessages, "none");
+            return continueAfterTools(userId, conversationId, currentMessages, "none");
         }
 
         return handleDecision(
@@ -402,7 +385,7 @@ public class AiServiceImpl implements AiService {
             toolMessages = runToolsAndBuildMessages(decision, userId, conversationId, prompt);
         } catch (Exception e) {
             log.warn("Failed to execute tool calls, falling back to direct completion", e);
-            return continueAfterTools(currentMessages, "none");
+            return continueAfterTools(userId, conversationId, currentMessages, "none");
         }
 
         List<Map<String, Object>> updatedMessages = new ArrayList<>(currentMessages);
@@ -415,11 +398,11 @@ public class AiServiceImpl implements AiService {
             downstreamChoice = "none";
         }
 
-        return continueAfterTools(updatedMessages, downstreamChoice)
+        return continueAfterTools(userId, conversationId, updatedMessages, downstreamChoice)
                 .onErrorResume(ToolLoopException.class, loopEx -> {
                     if (loopIndex + 1 >= Math.max(1, maxToolLoops)) {
                         log.warn("Continuation requested more tools but max loops reached; returning without running tools again");
-                        return continueAfterTools(updatedMessages, "none");
+                        return continueAfterTools(userId, conversationId, updatedMessages, "none");
                     }
                     log.info("Continuation requested another tool cycle (loop {}); repeating orchestration", loopIndex + 1);
                     return orchestrateLoop(
@@ -438,7 +421,7 @@ public class AiServiceImpl implements AiService {
                         return Mono.error(ex);
                     }
                     log.warn("Continuation failed, falling back to direct completion", ex);
-                    return continueAfterTools(currentMessages, "none");
+                    return continueAfterTools(userId, conversationId, currentMessages, "none");
                 });
     }
 
@@ -504,6 +487,7 @@ public class AiServiceImpl implements AiService {
                     payload.put("tool_choice", "none");
                 }
                 payload.put("stream", false);
+                attachScope(payload, userId, conversationId);
 
                 return callChatCompletions(payload, false)
                         .map(this::parseDecision)
@@ -514,15 +498,8 @@ public class AiServiceImpl implements AiService {
             }
 
             Map<String, Object> body = buildRequestBody(messages, false);
-            return webClient.post()
-                    .uri(path)
-                    .bodyValue(body)
-                    .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError,
-                            response -> mapToResponseStatus(response, "Upstream returned 4xx during tool planning"))
-                    .onStatus(HttpStatusCode::is5xxServerError,
-                            response -> mapToResponseStatus(response, "Upstream returned 5xx during tool planning"))
-                    .bodyToMono(String.class)
+            attachScope(body, userId, conversationId);
+            return chatGateway.call(body, aiMode)
                     .timeout(Duration.ofSeconds(60))
                     .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
                             .filter(this::isRetryableError))
@@ -578,13 +555,17 @@ public class AiServiceImpl implements AiService {
         return responses;
     }
 
-    private Mono<String> continueAfterTools(List<Map<String, Object>> messages, String toolChoice) {
+    private Mono<String> continueAfterTools(String userId,
+                                            String conversationId,
+                                            List<Map<String, Object>> messages,
+                                            String toolChoice) {
         if (compatibility == Compatibility.OPENAI) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", model);
             payload.put("messages", messages);
             payload.put("tool_choice", toolChoice == null ? "none" : toolChoice);
             payload.put("stream", false);
+            attachScope(payload, userId, conversationId);
 
             return callChatCompletions(payload, false)
                     .flatMap(json -> {
@@ -601,16 +582,9 @@ public class AiServiceImpl implements AiService {
         enriched.add(createMessage("system", SYSTEM_PROMPT_OLLAMA_FINAL));
 
         Map<String, Object> body = buildRequestBody(enriched, false);
+        attachScope(body, userId, conversationId);
 
-        return webClient.post()
-                .uri(path)
-                .bodyValue(body)
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError,
-                        response -> mapToResponseStatus(response, "Upstream returned 4xx during final response"))
-                .onStatus(HttpStatusCode::is5xxServerError,
-                        response -> mapToResponseStatus(response, "Upstream returned 5xx during final response"))
-                .bodyToMono(String.class)
+        return chatGateway.call(body, aiMode)
                 .timeout(Duration.ofSeconds(60))
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(300))
                         .filter(this::isRetryableError))
@@ -882,6 +856,44 @@ public class AiServiceImpl implements AiService {
         return new ArrayList<>(history.subList(start, history.size()));
     }
 
+    private void attachScope(Map<String, Object> payload, @Nullable String userId, @Nullable String conversationId) {
+        if (payload == null) {
+            return;
+        }
+        if (StringUtils.hasText(userId)) {
+            payload.putIfAbsent("userId", userId);
+        }
+        if (StringUtils.hasText(conversationId)) {
+            payload.putIfAbsent("conversationId", conversationId);
+        }
+    }
+
+    private Mono<String> aggregateStreamResponse(Map<String, Object> streamingBody) {
+        StreamAccumulator accumulator = new StreamAccumulator();
+        return chatGateway.stream(streamingBody, aiMode)
+                .timeout(streamTimeout())
+                .doOnNext(frame -> log.trace("callChatCompletions streaming frame: {}", frame))
+                .map(this::trimToNull)
+                .filter(Objects::nonNull)
+                .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data))
+                .doOnNext(chunk -> {
+                    try {
+                        accumulator.applyChunk(mapper, chunk);
+                    } catch (Exception ex) {
+                        log.warn("aggregateStreamResponse applyChunk failed, buffering raw chunk", ex);
+                        accumulator.appendFallbackText(chunk);
+                    }
+                })
+                .then(Mono.fromSupplier(() -> {
+                    try {
+                        return accumulator.toOpenAIStyleJson(mapper);
+                    } catch (Exception ex) {
+                        log.warn("aggregateStreamResponse toOpenAIStyleJson failed, using fallback", ex);
+                        return accumulator.fallbackAsSimpleJson(mapper);
+                    }
+                }));
+    }
+
     private void applyThinkOptions(Map<String, Object> payload) {
         if (!thinkEnabled || compatibility != Compatibility.OLLAMA) {
             return;
@@ -907,33 +919,8 @@ public class AiServiceImpl implements AiService {
         payload.put("think", true);
     }
 
-    private Mono<ResponseStatusException> mapToResponseStatus(ClientResponse response, String context) {
-        return response.createException()
-                .map(ex -> {
-                    String reason = extractBody(ex);
-                    String message = reason.isEmpty() ? context : context + ": " + reason;
-                    return new ResponseStatusException(response.statusCode(), message, ex);
-                });
-    }
-
-    private String extractBody(WebClientResponseException exception) {
-        try {
-            String body = exception.getResponseBodyAsString();
-            if (body != null && !body.isBlank()) {
-                return body;
-            }
-        } catch (Exception ignored) {
-            // fall through and use exception message
-        }
-        String message = exception.getMessage();
-        return message == null ? "" : message;
-    }
-
     private boolean isRetryableError(Throwable throwable) {
         if (throwable instanceof ResponseStatusException) {
-            return false;
-        }
-        if (throwable instanceof WebClientResponseException) {
             return false;
         }
         return !(throwable instanceof IllegalArgumentException);
@@ -990,7 +977,7 @@ public class AiServiceImpl implements AiService {
         }
 
         if (!mergeFinal) {
-            // 保持原样：透传后端 SSE（rawStream=true 不做内容提取）
+            // 保持原样：透传后端 SSE（rawStream=true 不做内容提取�?
             return callChatCompletionsStream(payload, true)
                     .doOnSubscribe(subscription -> log.debug("decideToolsStreamAsync subscribed payloadKeys={}",
                             payload != null ? payload.keySet() : "null"))
@@ -1002,7 +989,7 @@ public class AiServiceImpl implements AiService {
                             payload != null ? payload.keySet() : "null", error));
         }
 
-        // merge_final=true：边透传边累积，结束后追加一条“合并后的完整 JSON”事件
+        // merge_final=true：边透传边累积，结束后追加一条“合并后的完�?JSON”事�?
         StreamAccumulator acc = new StreamAccumulator();
 
         return callChatCompletionsStream(payload, true)
@@ -1055,29 +1042,43 @@ public class AiServiceImpl implements AiService {
             return Mono.error(new IllegalArgumentException("messages is required"));
         }
 
-        Map<String, Object> body = new HashMap<>();
-        body.put("model", reqModel);
-        body.put("messages", messages);
+        Map<String, Object> baseBody = new HashMap<>();
+        baseBody.put("model", reqModel);
+        baseBody.put("messages", messages);
         if (tools != null) {
-            body.put("tools", tools);
+            baseBody.put("tools", tools);
         }
-        body.put("tool_choice", toolChoice);
-        body.put("stream", stream);
+        baseBody.put("tool_choice", toolChoice);
+        Object scopeUser = payload.get("userId");
+        Object scopeConversation = payload.get("conversationId");
+        if (scopeUser != null) {
+            baseBody.put("userId", scopeUser);
+        }
+        if (scopeConversation != null) {
+            baseBody.put("conversationId", scopeConversation);
+        }
 
-        return webClient.post()
-                .uri(path)
-                .bodyValue(body)
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError,
-                        response -> mapToResponseStatus(response, "Upstream returned 4xx during tool call"))
-                .onStatus(HttpStatusCode::is5xxServerError,
-                        response -> mapToResponseStatus(response, "Upstream returned 5xx during tool call"))
-                .bodyToMono(String.class)
+        Map<String, Object> streamingBody = new HashMap<>(baseBody);
+        streamingBody.put("stream", true);
+
+        Mono<String> streamingMono = aggregateStreamResponse(streamingBody)
+                .retryWhen(retrySpec());
+
+        Map<String, Object> fallbackBody = new HashMap<>(baseBody);
+        fallbackBody.put("stream", false);
+
+        Mono<String> fallbackMono = chatGateway.call(fallbackBody, aiMode)
                 .timeout(requestTimeout())
-                .retryWhen(retrySpec())
-                .doOnSuccess(response -> log.debug("callChatCompletions completed stream={} responseLength={}",
-                        stream, response != null ? response.length() : 0))
-                .doOnError(error -> log.error("callChatCompletions failed stream={}", stream, error));
+                .retryWhen(retrySpec());
+
+        return streamingMono
+                .onErrorResume(error -> {
+                    log.warn("Streaming callChatCompletions failed, falling back to blocking request", error);
+                    return fallbackMono;
+                })
+                .doOnSuccess(response -> log.debug("callChatCompletions completed responseLength={}",
+                        response != null ? response.length() : 0))
+                .doOnError(error -> log.error("callChatCompletions failed after fallback", error));
     }
 
     private Flux<String> callChatCompletionsStream(Map<String, Object> payload) {
@@ -1109,20 +1110,18 @@ public class AiServiceImpl implements AiService {
         }
         body.put("tool_choice", toolChoice);
         body.put("stream", true);
+        Object scopeUser = payload.get("userId");
+        Object scopeConversation = payload.get("conversationId");
+        if (scopeUser != null) {
+            body.put("userId", scopeUser);
+        }
+        if (scopeConversation != null) {
+            body.put("conversationId", scopeConversation);
+        }
 
-        Flux<String> base = webClient.post()
-                .uri(path)
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .bodyValue(body)
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError,
-                        response -> mapToResponseStatus(response, "Upstream returned 4xx during tool call (stream)"))
-                .onStatus(HttpStatusCode::is5xxServerError,
-                        response -> mapToResponseStatus(response, "Upstream returned 5xx during tool call (stream)"))
-                .bodyToFlux(SSE_TYPE)
+        Flux<String> base = chatGateway.stream(body, aiMode)
                 .timeout(streamTimeout())
-                .doOnNext(event -> log.trace("callChatCompletionsStream SSE event: {}", event))
-                .map(ServerSentEvent::data)
+                .doOnNext(frame -> log.trace("callChatCompletionsStream frame: {}", frame))
                 .map(this::trimToNull)
                 .filter(Objects::nonNull)
                 .takeWhile(data -> !"[DONE]".equalsIgnoreCase(data));
@@ -1335,9 +1334,9 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    // ================== Streaming 合并累加器 ==================
+    // ================== Streaming 合并累加�?==================
     /**
-     * 把 OpenAI 风格的流式 delta（choices[].delta.*）合并成一次性 JSON。
+     * �?OpenAI 风格的流�?delta（choices[].delta.*）合并成一次�?JSON�?
      * 支持的片段：content / reasoning / tool_calls[index].function.{name,arguments} / id / type / finish_reason / role
      */
     private static final class StreamAccumulator {
@@ -1438,7 +1437,7 @@ public class AiServiceImpl implements AiService {
             message.put("role", role);
             message.put("content", content.toString());
 
-            // 非标准扩展：保留 reasoning（如果有）
+            // 非标准扩展：保留 reasoning（如果有�?
             if (reasoning.length() > 0) {
                 message.put("reasoning", reasoning.toString());
             }
@@ -1452,7 +1451,7 @@ public class AiServiceImpl implements AiService {
 
                     ObjectNode fn = mapper.createObjectNode();
                     if (t.name != null) fn.put("name", t.name);
-                    // 注意：arguments 必须是字符串（模型流式输出的 JSON 片段）
+                    // 注意：arguments 必须是字符串（模型流式输出的 JSON 片段�?
                     fn.put("arguments", t.arguments.toString());
                     tcn.set("function", fn);
                     tca.add(tcn);
@@ -1543,7 +1542,7 @@ public class AiServiceImpl implements AiService {
             if (rs != null) rawStream = (rs instanceof Boolean) ? (Boolean) rs : Boolean.parseBoolean(String.valueOf(rs));
         }
 
-        // 若指定 _delta_text 为 true，则输出“纯文本增量”，不再透传 JSON
+        // 若指�?_delta_text �?true，则输出“纯文本增量”，不再透传 JSON
         if (deltaText) {
             return callChatCompletionsStream(payload, false) // false => 使用 extractDeltaSafely 输出可读文本
                     .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (_delta_text) subscribed"))
@@ -1551,7 +1550,7 @@ public class AiServiceImpl implements AiService {
                     .doOnError(err -> log.error("continueAfterToolsStreamAsync (_delta_text) failed", err));
         }
 
-        // 若需要合并最终 JSON：边透传 raw JSON 边累积，结束时再追加一条合并后的完整 JSON
+        // 若需要合并最�?JSON：边透传 raw JSON 边累积，结束时再追加一条合并后的完�?JSON
         if (mergeFinal) {
             StreamAccumulator acc = new StreamAccumulator();
             return callChatCompletionsStream(payload, true) // 原样透传
@@ -1578,7 +1577,7 @@ public class AiServiceImpl implements AiService {
                     .doOnError(err -> log.error("continueAfterToolsStreamAsync (_merge_final) failed", err));
         }
 
-        // 默认：raw 透传（逐帧 JSON），可用 _raw_stream=false 强制走 delta 文本解析
+        // 默认：raw 透传（逐帧 JSON），可用 _raw_stream=false 强制�?delta 文本解析
         if (!rawStream) {
             return callChatCompletionsStream(payload, false)
                     .doOnSubscribe(s -> log.debug("continueAfterToolsStreamAsync (forced-delta) subscribed"))
@@ -1620,7 +1619,7 @@ public class AiServiceImpl implements AiService {
         Map<String, Object> userMsg = createMessage("user", prompt);
         conversation.add(userMsg);
 
-        // 启动工具决策流，实时向前端推送规划片段
+        // 启动工具决策流，实时向前端推送规划片�?
         DecisionStreamResult decisionStream = streamToolDecision(userId, conversationId, prompt, history);
         Mono<ModelDecision> decisionMono = decisionStream.decision();
 
@@ -1720,7 +1719,7 @@ public class AiServiceImpl implements AiService {
         return Flux.merge(heartbeat, planningEvents, finalFlux)
                 .onErrorResume(ex -> {
                     log.error("orchestrateChatStream failed userId={} conversationId={}", userId, conversationId, ex);
-                    return Flux.just("抱歉，流式会话发生异常，请稍后重试。");
+                    return Flux.just("Streaming conversation encountered an error, please retry shortly.");
                 });
     }
 
@@ -1817,8 +1816,13 @@ public class AiServiceImpl implements AiService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", model);
         payload.put("messages", messages);
+        attachScope(payload, state.userId, state.conversationId);
 
-        if (!state.mergedTools.isEmpty()) {
+        boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
+        if (hasClientTools) {
+            payload.put("tools", state.clientTools);
+            payload.put("tool_choice", "required");
+        } else if (!state.mergedTools.isEmpty()) {
             payload.put("tools", state.mergedTools);
             payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
         } else {
@@ -1837,16 +1841,36 @@ public class AiServiceImpl implements AiService {
                 state.assistantSummary = summary;
             }
 
-            if (decision == null || !decision.hasToolCalls()) {
-                if (summary != null && !summary.isBlank()) {
-                    state.conversation.add(createMessage("assistant", summary));
-                    state.finalAnswer = summary;
+        if (decision == null || !decision.hasToolCalls()) {
+            if (!state.clientToolNames.isEmpty()) {
+                ToolCallDTO fallback = buildClientToolFallback(state, summary);
+                if (fallback != null) {
+                    state.pendingClientCalls.add(fallback);
+                    sink.next(toNdjson(NdjsonEvent.builder()
+                            .event("pendingClientCalls")
+                            .ts(now())
+                            .data(Map.of("calls", List.of(fallback)))
+                            .build()));
+                    state.finished = false;
+                    state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                    if (summary != null && !summary.isBlank()) {
+                        state.assistantSummary = summary;
+                    } else if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+                        state.assistantSummary = "等待客户端工具执行";
+                    }
+                    emitStep(sink, state);
+                    return Mono.empty();
                 }
-                state.finished = true;
-                state.remainingLoops = 0;
-                emitStep(sink, state);
-                return Mono.empty();
             }
+            if (summary != null && !summary.isBlank()) {
+                state.conversation.add(createMessage("assistant", summary));
+                state.finalAnswer = summary;
+            }
+            state.finished = true;
+            state.remainingLoops = 0;
+            emitStep(sink, state);
+            return Mono.empty();
+        }
 
             List<ToolCall> toolCalls = decision.getToolCalls();
             List<AiToolExecutor.ToolCall> allCalls = new ArrayList<>();
@@ -1904,7 +1928,7 @@ public class AiServiceImpl implements AiService {
                     state.finished = false;
                     state.remainingLoops = Math.max(0, maxToolLoops - 1);
                     if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                        state.assistantSummary = "等待客户端工具执行。";
+                        state.assistantSummary = "Waiting for client tool execution";
                     }
                     emitStep(sink, state);
                     return Mono.empty();
@@ -1922,7 +1946,13 @@ public class AiServiceImpl implements AiService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", model);
         payload.put("messages", messages);
-        if (!state.mergedTools.isEmpty()) {
+        attachScope(payload, state.userId, state.conversationId);
+
+        boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
+        if (hasClientTools) {
+            payload.put("tools", state.clientTools);
+            payload.put("tool_choice", "required");
+        } else if (!state.mergedTools.isEmpty()) {
             payload.put("tools", state.mergedTools);
             payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
         } else {
@@ -1958,11 +1988,27 @@ public class AiServiceImpl implements AiService {
                             state.finished = false;
                             state.remainingLoops = Math.max(0, maxToolLoops - 1);
                             if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                                state.assistantSummary = "额外的服务端操作将在下一轮执行。";
+                                state.assistantSummary = "Additional server-side actions will run in the next loop";
                             }
                             emitStep(sink, state);
                             return Mono.empty();
                         }
+                    }
+
+                    ToolCallDTO fallback = state.pendingClientCalls.isEmpty()
+                            ? buildClientToolFallback(state, content)
+                            : null;
+                    if (fallback != null) {
+                        state.pendingClientCalls.add(fallback);
+                        sink.next(toNdjson(NdjsonEvent.builder()
+                                .event("pendingClientCalls")
+                                .ts(now())
+                                .data(Map.of("calls", List.of(fallback)))
+                                .build()));
+                        state.finished = false;
+                        state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                        emitStep(sink, state);
+                        return Mono.empty();
                     }
 
                     if (content != null && !content.isBlank()) {
@@ -1981,7 +2027,13 @@ public class AiServiceImpl implements AiService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", model);
         payload.put("messages", messages);
-        if (!state.mergedTools.isEmpty()) {
+        attachScope(payload, state.userId, state.conversationId);
+
+        boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
+        if (hasClientTools) {
+            payload.put("tools", state.clientTools);
+            payload.put("tool_choice", "required");
+        } else if (!state.mergedTools.isEmpty()) {
             payload.put("tools", state.mergedTools);
             payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
         } else {
@@ -2015,11 +2067,27 @@ public class AiServiceImpl implements AiService {
                             state.finished = false;
                             state.remainingLoops = Math.max(0, maxToolLoops - 1);
                             if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                                state.assistantSummary = "服务端将继续处理后续操作。";
+                                state.assistantSummary = "Server-side processing will continue in the next loop";
                             }
                             emitStep(sink, state);
                             return Mono.empty();
                         }
+                    }
+
+                    ToolCallDTO fallback = state.pendingClientCalls.isEmpty()
+                            ? buildClientToolFallback(state, content)
+                            : null;
+                    if (fallback != null) {
+                        state.pendingClientCalls.add(fallback);
+                        sink.next(toNdjson(NdjsonEvent.builder()
+                                .event("pendingClientCalls")
+                                .ts(now())
+                                .data(Map.of("calls", List.of(fallback)))
+                                .build()));
+                        state.finished = false;
+                        state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                        emitStep(sink, state);
+                        return Mono.empty();
                     }
 
                     if (content != null && !content.isBlank()) {
@@ -2053,6 +2121,129 @@ public class AiServiceImpl implements AiService {
             results.add(new ToolResultDTO(id, name, content));
         }
         return new ServerExecutionResult(messages, results);
+    }
+
+    private @Nullable ToolCallDTO buildClientToolFallback(StepState state, @Nullable String summary) {
+        if (state == null || state.clientTools == null || state.clientTools.isEmpty()) {
+            return null;
+        }
+        if (state.hasClientResults || !state.pendingClientCalls.isEmpty()) {
+            return null;
+        }
+
+        String preferred = resolveClientToolName(state.clientTools, "open_url");
+        String selected = StringUtils.hasText(preferred)
+                ? preferred
+                : (state.clientTools.size() == 1
+                ? extractFunctionName(state.clientTools.get(0))
+                : resolveClientToolName(state.clientTools, null));
+
+        if (!StringUtils.hasText(selected)) {
+            return null;
+        }
+
+        String normalized = selected.toLowerCase(Locale.ROOT);
+        if (!"open_url".equals(normalized)) {
+            return null;
+        }
+
+        String prompt = state.request != null ? state.request.getQ() : null;
+        boolean explicitRequest = state.clientTools.size() == 1
+                || mentionsClientTool(prompt, summary, normalized);
+
+        String url = extractFirstUrl(prompt);
+        if (!StringUtils.hasText(url)) {
+            url = extractFirstUrl(summary);
+        }
+        if (!StringUtils.hasText(url) && state.conversation != null) {
+            for (int i = state.conversation.size() - 1; i >= 0 && !StringUtils.hasText(url); i--) {
+                Object content = state.conversation.get(i).get("content");
+                if (content instanceof String str) {
+                    url = extractFirstUrl(str);
+                } else if (content != null) {
+                    url = extractFirstUrl(content.toString());
+                }
+            }
+        }
+
+        if (!StringUtils.hasText(url) || !explicitRequest) {
+            return null;
+        }
+
+        ToolCallDTO dto = new ToolCallDTO();
+        dto.setId("client-fallback-" + UUID.randomUUID());
+        dto.setName(selected);
+        dto.setExecTarget(ExecTarget.CLIENT);
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("url", url);
+        dto.setArguments(args);
+        return dto;
+    }
+
+    private @Nullable String resolveClientToolName(List<Map<String, Object>> tools, @Nullable String preferredName) {
+        if (tools == null || tools.isEmpty()) {
+            return null;
+        }
+        if (StringUtils.hasText(preferredName)) {
+            for (Map<String, Object> tool : tools) {
+                String name = extractFunctionName(tool);
+                if (preferredName.equalsIgnoreCase(name)) {
+                    return name;
+                }
+            }
+        }
+        for (Map<String, Object> tool : tools) {
+            String name = extractFunctionName(tool);
+            if (StringUtils.hasText(name)) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    private boolean mentionsClientTool(@Nullable String prompt, @Nullable String summary, String toolName) {
+        if (!StringUtils.hasText(toolName)) {
+            return false;
+        }
+        String combined = (Optional.ofNullable(prompt).orElse("") + " " + Optional.ofNullable(summary).orElse(""))
+                .toLowerCase(Locale.ROOT);
+        if (combined.isBlank()) {
+            return false;
+        }
+        if (combined.contains(toolName)) {
+            return true;
+        }
+        if (toolName.equals("open_url")) {
+            return combined.contains("open url") || combined.contains("open the url") || combined.contains("https://");
+        }
+        return false;
+    }
+
+    private @Nullable String extractFirstUrl(@Nullable String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        Matcher matcher = URL_PATTERN.matcher(text);
+        if (matcher.find()) {
+            return stripTrailingUrlChars(matcher.group(1));
+        }
+        return null;
+    }
+
+    private String stripTrailingUrlChars(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String trimmed = value;
+        while (!trimmed.isEmpty()) {
+            char last = trimmed.charAt(trimmed.length() - 1);
+            if (TRAILING_URL_CHARS.indexOf(last) >= 0 || last == FULL_WIDTH_STOP) {
+                trimmed = trimmed.substring(0, trimmed.length() - 1);
+                continue;
+            }
+            break;
+        }
+        return trimmed;
     }
 
     private ToolCallSplit splitToolCalls(List<ToolCall> calls, StepState state) {
@@ -2197,7 +2388,7 @@ public class AiServiceImpl implements AiService {
             return;
         }
         try {
-            if (!isDraftAndFinalMode() && state.hasUserPrompt && state.request != null) {
+            if (state.hasUserPrompt && state.request != null) {
                 String question = state.request.getQ();
                 if (question != null && !question.isBlank()) {
                     memoryService.upsertMessage(
@@ -2240,7 +2431,7 @@ public class AiServiceImpl implements AiService {
         state.finished = true;
         state.remainingLoops = 0;
         if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-            state.assistantSummary = "发生错误，流程结束";
+            state.assistantSummary = "An error occurred and the workflow stopped";
         }
         emitStep(sink, state);
     }
@@ -2451,7 +2642,7 @@ public class AiServiceImpl implements AiService {
 
     private record ToolCallSplit(List<ToolCallDTO> client, List<ToolCallDTO> server) {}
 
-    // 小工具：读取 boolean 开关
+    // 小工具：读取 boolean 开�?
     private static boolean getBool(@Nullable Map<String, Object> map, String key, boolean defVal) {
         if (map == null || !map.containsKey(key)) return defVal;
         Object v = map.get(key);
@@ -2460,3 +2651,5 @@ public class AiServiceImpl implements AiService {
 
 
 }
+
+

@@ -32,7 +32,7 @@ public class FindRelevantMemoryTool implements AiTool {
 
     @Override
     public String description() {
-        return "按需取回与当前问题相关的历史消息。";
+        return "Retrieve historical messages related to the current question on demand.";
     }
 
     @Override

@@ -4,13 +4,8 @@ server:
     enabled: true
 
 ai:
-  compatibility: OPENAI
-
-  base-url: http://localhost:11434
-  path: /v1/chat/completions
-  model: qwen3:8b
-  api-key: ${AI_API_KEY:}
-  auth-scheme: Bearer
+  mode: OPENAI        # switch to OLLAMA for local models
+  model: ${AI_DEFAULT_MODEL:qwen3:8b}  # optional legacy override, defaults handled in code
   stepjson:
     heartbeat-seconds: 5       # NDJSON heartbeat interval (seconds)
   think:
@@ -19,7 +14,7 @@ ai:
   tools:
     max-loops: 2
   memory:
-    storage: database        # uncomment to use DatabaseConversationMemoryService (requires configured datasource)
+    storage: database        # set to in-memory to use the in-memory implementation
     max-messages: 12
     persistenceMode: draft-and-final   # draft-and-final | final-only
     promoteDraftsOnFinish: true        # promote step DRAFT rows to FINAL when finished
@@ -32,6 +27,21 @@ ai:
 
 
 spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:dummy}
+      # Spring AI appends the /v1/* paths automatically; point at the root host.
+      base-url: ${OPENAI_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${AI_OPENAI_MODEL:qwen3:8b}
+          temperature: 0.2
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${AI_OLLAMA_MODEL:qwen3:8b}
+          temperature: 0.2
   main:
     web-application-type: reactive
   http:
