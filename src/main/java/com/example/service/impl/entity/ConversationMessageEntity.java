@@ -14,5 +14,8 @@ public class ConversationMessageEntity {
     private String content;
     private String payload;
     private String messageTimestamp;
+    private String state;
+    private String stepId;
+    private Integer seq;
     private LocalDateTime createdAt;
 }

@@ -21,6 +21,8 @@ ai:
   memory:
     storage: database        # uncomment to use DatabaseConversationMemoryService (requires configured datasource)
     max-messages: 12
+    persistenceMode: draft-and-final   # draft-and-final | final-only
+    promoteDraftsOnFinish: true        # promote step DRAFT rows to FINAL when finished
   client:
     timeout-ms: 180000           # wait longer for upstream completion calls
     stream-timeout-ms: 240000    # longer window for streaming responses

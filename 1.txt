@@ -1,0 +1,148 @@
+你是一名资深 Spring WebFlux + Spring AI 工程师。请对一个已有的 Java/Spring Boot WebFlux 项目进行最小侵入的局部改造：把当前自研的 AI 客户端与工具编排逻辑，切换到 Spring AI（保留现有接口与流式行为）。
+
+代码背景（已存在）
+	•	框架：Spring Boot（WebFlux）、Reactor。
+	•	关键类：
+	•	com.example.service.AiService / AiServiceImpl：编排“一次性/流式聊天”和“v2 两阶段：decide → 执行工具 → continue”。
+	•	com.example.controller.ChatController：对外接口 /ai/chat（GET）、/ai/stream（SSE）、/ai/decide（POST）、/ai/decide/stream（SSE）、/ai/continue、/ai/v2/chat、/ai/v2/chat/stream。
+	•	com.example.service.ConversationMemoryService 与实现：负责历史与关键词记忆（内存版与数据库版）。
+	•	com.example.tool.ToolRegistry + AiToolExecutor + FindRelevantMemoryTool：工具注册与执行。
+	•	数据表（若涉及 DB）：java_ai.conversation_messages（含 DRAFT/FINAL、step_id、seq 等字段）。
+
+改造目标：“替换 AI 模型调用与工具调用层”为 Spring AI，实现 OPENAI/Ollama 双模可配；保留 Controller 的入参/出参与 SSE 语义；保留/复用现有的内存与 DB 记忆接口。
+
+⸻
+
+产出要求（重要）
+	1.	保留所有现有 REST 接口路由与签名，不破坏前端/自动化测试。
+	2.	引入 Spring AI 并实现：
+	•	ChatModel 与 ChatClient（OpenAI 与 Ollama 至少支持其一，可通过配置切换）。
+	•	流式输出（SSE）：把 Spring AI 的流式响应映射到现有的 text/event-stream 事件（与当前输出一致或更合理）。
+	•	工具（function-calling）：用 Spring AI 的工具机制包装现有 ToolRegistry 的工具；保持“自动/手动工具调用”的两阶段流程。
+	3.	最小改动：控制层不大动，主要替换 AiServiceImpl 的“模型调用 + 工具调用”实现；为 Spring AI 新增配置类/适配器类。
+	4.	完整可编译：给出 pom.xml 依赖变更、application.yaml 示例、必要的新类/配置。
+	5.	提供统一 Diff 或逐文件补丁：用 diff --git 风格或清晰的“文件路径 + 完整代码块”。避免只给片段。
+	6.	回归用例：给出 curl/Swagger 示例请求，覆盖 /ai/chat、/ai/stream、/ai/decide、/ai/v2/chat。
+
+⸻
+
+具体改造任务
+
+A. 依赖与配置
+	1.	修改 pom.xml，新增（请给出确切 groupId/artifactId/版本，并说明与 Spring Boot 版本兼容性）：
+	•	Spring AI OpenAI Starter（和/或）Ollama Starter。
+	•	Jackson/Validation 若需要的额外依赖。
+	2.	在 application.yaml 增加：
+
+spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:}   # 可选，兼容代理/镜像
+      chat:
+        options:
+          model: gpt-4o-mini           # 示例，可通过自定义属性覆盖
+          temperature: 0.2
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen3:8b
+          temperature: 0.2
+
+ai:
+  mode: OPENAI   # 或 OLLAMA
+  tools:
+    max-loops: 2
+  memory:
+    storage: in-memory  # 或 database
+
+要求：给出同名属性的 @ConfigurationProperties 绑定类或直接在配置类读取。
+
+B. 基础 Bean 与 ChatClient
+
+新增 com.example.config.SpringAiConfig：
+	•	根据 ai.mode 条件装配 ChatModel（OpenAIChatModel 或 OllamaChatModel）。
+	•	暴露 ChatClient Bean：ChatClient.builder(chatModel).build()（或当下 Spring AI 推荐方式）。
+	•	说明如何设置超时、重试、日志。
+
+C. 工具适配（Spring AI ↔ 现有 ToolRegistry）
+
+新增 com.example.ai.tools.McpLikeToolAdapter（命名随意）：
+	•	将现有 ToolRegistry 中的每个工具，包装成 Spring AI 的工具回调（例如 FunctionCallback 或官方提供的 Tool API）。
+	•	入参：沿用现有 JSON schema/Map<String,Object>。
+	•	出参：返回结构化 JSON（保持你项目的 tool 消息格式），并把文本结果同时放入模型可读的 text。
+	•	支持自动与手动调用：
+	•	自动：模型函数调用 → 调用 ToolRegistry → 结果回注给模型。
+	•	手动：沿用现有 /ai/decide → /ai/continue 两阶段流程（即先让模型“建议工具/参数”，再由后端执行，最后“续写回答”）。
+
+请给出一个把 FindRelevantMemoryTool 暴露为 Spring AI 工具的完整示例，包括：输入 schema、参数校验、异常映射。
+
+D. 替换 AiServiceImpl
+	1.	非流式：用 ChatClient 构造消息（system + limited history + user），可选携带 tools，得到一次性回答。
+	2.	流式（SSE）：使用 Spring AI 的流式 API（如 stream(...)），将增量内容映射为 ServerSentEvent，兼容当前前端解析。
+	•	要求：在 SSE 里保留你系统原有的阶段事件（如 stage: decision/chunk/final），或给出兼容的简化版。
+	3.	v2 两阶段：
+	•	decide: 让模型仅输出工具名与参数（或使用工具自动调用但只返回计划），落盘 DRAFT。
+	•	工具执行：调用适配器执行真实工具。
+	•	continue: 把工具结果作为 tool/assistant 上文注入，再次调用 ChatClient 得到最终 FINAL。
+	4.	记忆：保持对 ConversationMemoryService 的调用不变。若有精力，演示如何把历史摘要/检索结果拼接到 prompt。
+
+E. 控制层（尽量只做极小变更）
+	•	如需改动 ChatController，仅限于：SSE 的 MediaType、Flux<ServerSentEvent<String>> 的构造方式，或异常映射的细节。
+	•	保证原有 curl/Swagger 用法不变。
+
+⸻
+
+交付物格式（示例）
+	1.	pom.xml 完整 diff（含版本号）
+	2.	新增文件（给出完整代码）：
+	•	com/example/config/SpringAiConfig.java
+	•	com/example/ai/tools/ToolAdapters.java（或分文件）
+	3.	修改文件（给出完整类代码或最小 diff）：
+	•	com/example/service/impl/AiServiceImpl.java
+	•	（如有）com/example/controller/ChatController.java
+	4.	application.yaml 片段（可运行的最小配置）
+	5.	回归测试命令：
+
+# 一次性
+curl "http://localhost:8080/ai/chat?q=你好"
+
+# 流式
+curl -N -H "Accept: text/event-stream" "http://localhost:8080/ai/stream?q=你好"
+
+# v2: decide
+curl -H "Content-Type: application/json" -X POST http://localhost:8080/ai/decide -d '{
+  "mode":"OPENAI",
+  "model":"gpt-4o-mini",
+  "messages":[{"role":"user","content":"查询东京明天天气"}],
+  "tools":[{"type":"function","function":{"name":"web_search","parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}}]
+}'
+
+# v2: continue
+curl -H "Content-Type: application/json" -X POST http://localhost:8080/ai/continue -d '{
+  "decisionId":"<from-decide>",
+  "toolResult":{"web_search":{"snippets":["..."]}}
+}'
+
+
+
+⸻
+
+质量与验收标准
+	•	编译通过、应用可启动，/ai/* 接口全部可用（含 SSE）。
+	•	切换 ai.mode=OPENAI/OLLAMA 均可工作（若只实现其一，请明确说明并给出另一种最小接入示例）。
+	•	工具调用：模型能识别到至少一个本地工具（如 FindRelevantMemoryTool），并成功通过 Spring AI 执行。
+	•	无破坏性变更：控制层路由、DTO、响应结构保持兼容；SSE 能持续输出增量文本。
+	•	关键路径有日志与异常处理（超时、重试、工具失败的降级说明）。
+
+⸻
+
+代码风格与注释
+	•	使用 @Slf4j，对外依旧返回简洁错误，对内记录 root cause。
+	•	关键新增类写 类级注释：职责、与旧实现的边界、可扩展点。
+	•	对工具适配器写 时序注释：model → tool_call → ToolRegistry → result → model。
+
+⸻
+
+请严格按以上要求输出：完整 diff 或完整类文件 + 可运行示例配置 + 回归命令。若 Spring AI 各版本 API 有出入，请以“当前稳定版的官方推荐用法”为准并在注释中说明。

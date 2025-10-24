@@ -1,6 +1,7 @@
 package com.example.service.impl;
 
 import com.example.service.ConversationMemoryService;
+import com.example.service.impl.dto.ToolResultDTO;
 import com.example.service.impl.dto.V2StepNdjsonRequest;
 import com.example.tools.AiToolExecutor;
 import com.example.tools.ToolRegistry;
@@ -16,11 +17,12 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -39,7 +41,7 @@ class AiServiceStepNdjsonTests {
         toolRegistry = Mockito.mock(ToolRegistry.class);
         toolExecutor = Mockito.mock(AiToolExecutor.class);
 
-        when(memoryService.getHistory(anyString(), anyString())).thenReturn(List.of());
+        when(memoryService.getContext(anyString(), anyString(), anyInt())).thenReturn(List.of());
         when(toolRegistry.openAiServerToolsSchema()).thenReturn(List.of());
 
         service = new AiServiceImpl(
@@ -56,7 +58,63 @@ class AiServiceStepNdjsonTests {
 
     @Test
     @SuppressWarnings("unchecked")
-    void emitStepPersistsFinalAnswerOnce() throws Exception {
+    void emitStepPersistsDraftsOnce() throws Exception {
+        V2StepNdjsonRequest request = new V2StepNdjsonRequest();
+        request.setUserId("u1");
+        request.setConversationId("c1");
+        request.setQ("hello?");
+        request.setResponseMode("step-json-ndjson");
+
+        Class<?> stepStateClass = Class.forName("com.example.service.impl.AiServiceImpl$StepState");
+        Constructor<?> ctor = stepStateClass.getDeclaredConstructor(AiServiceImpl.class, V2StepNdjsonRequest.class);
+        ctor.setAccessible(true);
+        Object state = ctor.newInstance(service, request);
+
+        Field serverResultsField = stepStateClass.getDeclaredField("serverResults");
+        serverResultsField.setAccessible(true);
+        List<ToolResultDTO> serverResults = (List<ToolResultDTO>) serverResultsField.get(state);
+        serverResults.add(new ToolResultDTO("call-1", "demo", "{\"ok\":true}"));
+
+        Method emitStep = AiServiceImpl.class.getDeclaredMethod("emitStep", reactor.core.publisher.FluxSink.class, stepStateClass);
+        emitStep.setAccessible(true);
+
+        Flux.<String>create(sink -> {
+            try {
+                emitStep.invoke(service, sink, state);
+                emitStep.invoke(service, sink, state);
+            } catch (Exception ex) {
+                sink.error(ex);
+                return;
+            }
+            sink.complete();
+        }).collectList().block();
+
+        ArgumentCaptor<String> roleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Integer> seqCaptor = ArgumentCaptor.forClass(Integer.class);
+        ArgumentCaptor<String> stateCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(memoryService, times(2)).upsertMessage(
+                eq("u1"),
+                eq("c1"),
+                roleCaptor.capture(),
+                contentCaptor.capture(),
+                payloadCaptor.capture(),
+                anyString(),
+                seqCaptor.capture(),
+                stateCaptor.capture()
+        );
+
+        assertThat(roleCaptor.getAllValues()).containsExactly("user", "tool");
+        assertThat(contentCaptor.getAllValues()).containsExactly("hello?", null);
+        assertThat(payloadCaptor.getAllValues()).containsExactly(null, "{\"ok\":true}");
+        assertThat(seqCaptor.getAllValues()).containsExactly(1, 2);
+        assertThat(stateCaptor.getAllValues()).containsExactly("DRAFT", "DRAFT");
+    }
+
+    @Test
+    void emitStepPersistsFinalWithFallbackAndPromotesDrafts() throws Exception {
         V2StepNdjsonRequest request = new V2StepNdjsonRequest();
         request.setUserId("u1");
         request.setConversationId("c1");
@@ -74,7 +132,11 @@ class AiServiceStepNdjsonTests {
 
         Field finalAnswerField = stepStateClass.getDeclaredField("finalAnswer");
         finalAnswerField.setAccessible(true);
-        finalAnswerField.set(state, "好的");
+        finalAnswerField.set(state, "");
+
+        Field summaryField = stepStateClass.getDeclaredField("assistantSummary");
+        summaryField.setAccessible(true);
+        summaryField.set(state, "OK");
 
         Method emitStep = AiServiceImpl.class.getDeclaredMethod("emitStep", reactor.core.publisher.FluxSink.class, stepStateClass);
         emitStep.setAccessible(true);
@@ -89,26 +151,32 @@ class AiServiceStepNdjsonTests {
             sink.complete();
         }).collectList().block();
 
-        ArgumentCaptor<List<Map<String, Object>>> captor = ArgumentCaptor.forClass(List.class);
-        verify(memoryService, times(1)).appendMessages(eq("u1"), eq("c1"), captor.capture());
+        verify(memoryService, times(1)).upsertMessage(
+                eq("u1"),
+                eq("c1"),
+                eq("assistant"),
+                eq("OK"),
+                isNull(),
+                anyString(),
+                eq(999),
+                eq("FINAL")
+        );
+        verify(memoryService, times(1)).promoteDraftsToFinal(eq("u1"), eq("c1"), anyString());
+    }
 
-        List<Map<String, Object>> messages = captor.getValue();
-        assertThat(messages).hasSize(2);
-        assertThat(messages.get(0).get("role")).isEqualTo("user");
-        assertThat(messages.get(0).get("content")).isEqualTo("hello?");
-        assertThat(messages.get(1).get("role")).isEqualTo("assistant");
-        assertThat(messages.get(1).get("content")).isEqualTo("好的");
+    @Test
+    void stepStateUsesContextForInitialConversation() throws Exception {
+        V2StepNdjsonRequest request = new V2StepNdjsonRequest();
+        request.setUserId("u2");
+        request.setConversationId("c2");
 
-        Flux.<String>create(sink -> {
-            try {
-                emitStep.invoke(service, sink, state);
-            } catch (Exception ex) {
-                sink.error(ex);
-                return;
-            }
-            sink.complete();
-        }).collectList().block();
+        Class<?> stepStateClass = Class.forName("com.example.service.impl.AiServiceImpl$StepState");
+        Constructor<?> ctor = stepStateClass.getDeclaredConstructor(AiServiceImpl.class, V2StepNdjsonRequest.class);
+        ctor.setAccessible(true);
+        ctor.newInstance(service, request);
 
-        verify(memoryService, times(1)).appendMessages(any(), any(), any());
+        ArgumentCaptor<Integer> limitCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(memoryService, times(1)).getContext(eq("u2"), eq("c2"), limitCaptor.capture());
+        assertThat(limitCaptor.getValue()).isPositive();
     }
 }

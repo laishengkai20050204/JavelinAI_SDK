@@ -16,7 +16,8 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +40,9 @@ class DatabaseConversationMemoryServiceTests {
         entity.setRole("assistant");
         entity.setPayload("{\"role\":\"assistant\",\"content\":\"hello\"}");
         entity.setMessageTimestamp("2024-06-01T12:00:00Z");
+        entity.setState("FINAL");
+        entity.setStepId("step-1");
+        entity.setSeq(999);
         entity.setCreatedAt(LocalDateTime.of(2024, Month.JUNE, 1, 12, 0));
 
         when(mapper.selectHistory("u", "c")).thenReturn(List.of(entity));
@@ -50,6 +54,7 @@ class DatabaseConversationMemoryServiceTests {
         assertThat(message.get("role")).isEqualTo("assistant");
         assertThat(message.get("content")).isEqualTo("hello");
         assertThat(message.get("timestamp")).isEqualTo("2024-06-01T12:00:00Z");
+        assertThat(message.get("state")).isEqualTo("FINAL");
     }
 
     @Test
@@ -59,17 +64,23 @@ class DatabaseConversationMemoryServiceTests {
                 "content", "hi there"
         )));
 
-        ArgumentCaptor<ConversationMessageEntity> captor = ArgumentCaptor.forClass(ConversationMessageEntity.class);
-        verify(mapper).insertMessage(captor.capture());
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> stepIdCaptor = ArgumentCaptor.forClass(String.class);
 
-        ConversationMessageEntity saved = captor.getValue();
-        assertThat(saved.getUserId()).isEqualTo("u");
-        assertThat(saved.getConversationId()).isEqualTo("c");
-        assertThat(saved.getRole()).isEqualTo("user");
-        assertThat(saved.getContent()).isEqualTo("hi there");
-        assertThat(saved.getPayload()).contains("\"content\":\"hi there\"");
-        assertThat(saved.getMessageTimestamp()).isNull();
-        assertThat(saved.getCreatedAt()).isNotNull();
+        verify(mapper).upsertMessage(
+                eq("u"),
+                eq("c"),
+                eq("user"),
+                eq("hi there"),
+                payloadCaptor.capture(),
+                isNull(),
+                stepIdCaptor.capture(),
+                eq(1),
+                eq("FINAL")
+        );
+
+        assertThat(payloadCaptor.getValue()).contains("\"content\":\"hi there\"");
+        assertThat(stepIdCaptor.getValue()).startsWith("legacy-");
     }
 
     @Test
@@ -80,6 +91,7 @@ class DatabaseConversationMemoryServiceTests {
         fallback.setRole("assistant");
         fallback.setContent("latest response");
         fallback.setMessageTimestamp("2024-07-10T08:30:00Z");
+        fallback.setState("FINAL");
         fallback.setCreatedAt(LocalDateTime.of(2024, Month.JULY, 10, 8, 30));
 
         when(mapper.selectByContent("u", "c", "missing", 5)).thenReturn(List.of());
