@@ -2113,6 +2113,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private void emitStep(FluxSink<String> sink, StepState state) {
+        maybePersistStepMemory(state);
         OrchestrationStep step = OrchestrationStep.builder()
                 .stepId(state.stepId)
                 .finished(state.finished)
@@ -2129,6 +2130,29 @@ public class AiServiceImpl implements AiService {
                 .ts(now())
                 .data(convertToMap(step))
                 .build()));
+    }
+
+    private void maybePersistStepMemory(StepState state) {
+        // Persist the resolved exchange once so NDJSON mode updates conversation memory.
+        if (state.memoryAppended || !state.finished || !state.hasUserPrompt || !state.hasIdentifiers()) {
+            return;
+        }
+        String question = state.request.getQ();
+        String answer = state.finalAnswer;
+        if (question == null || question.isBlank() || answer == null || answer.isBlank()) {
+            return;
+        }
+        try {
+            appendToMemory(
+                    state.userId,
+                    state.conversationId,
+                    List.of(createMessage("user", question), createMessage("assistant", answer))
+            );
+            state.memoryAppended = true;
+        } catch (Exception ex) {
+            log.warn("Failed to append step memory userId={} conversationId={}",
+                    state.userId, state.conversationId, ex);
+        }
     }
 
     private void handleStepError(FluxSink<String> sink, StepState state, Throwable error) {
@@ -2263,6 +2287,7 @@ public class AiServiceImpl implements AiService {
         private final List<ToolResultDTO> serverResults = new ArrayList<>();
         private final List<ToolCallDTO> pendingClientCalls = new ArrayList<>();
         private boolean clientResultsAppended;
+        private boolean memoryAppended;
         private Disposable heartbeat;
         private boolean finished;
         private Integer remainingLoops;

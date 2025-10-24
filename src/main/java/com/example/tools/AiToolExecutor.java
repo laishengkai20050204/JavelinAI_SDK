@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Component
 @RequiredArgsConstructor
@@ -18,6 +19,8 @@ public class AiToolExecutor {
 
     private final ToolRegistry registry;
     private final ObjectMapper mapper;
+
+    private static final Set<String> PROTECTED_SCOPE_KEYS = Set.of("userId", "conversationId");
 
     public record ToolCall(String id, String name, String argumentsJson) {}
 
@@ -56,7 +59,17 @@ public class AiToolExecutor {
             );
 
             if (fallbackArgs != null) {
-                fallbackArgs.forEach(args::putIfAbsent);
+                // Enforce scoped identifiers from the server context to avoid cross-user access.
+                fallbackArgs.forEach((key, value) -> {
+                    if (value != null && PROTECTED_SCOPE_KEYS.contains(key)) {
+                        args.put(key, value);
+                    }
+                });
+                fallbackArgs.forEach((key, value) -> {
+                    if (!PROTECTED_SCOPE_KEYS.contains(key)) {
+                        args.putIfAbsent(key, value);
+                    }
+                });
             }
 
             ToolResult result;
