@@ -2422,7 +2422,7 @@ public class AiServiceImpl implements AiService {
                 .stepId(state.stepId)
                 .finished(state.finished)
                 .remainingLoops(state.remainingLoops)
-                .context(emptyCtx) // 不回传历史
+                .context(emptyCtx)
                 .serverResults(new ArrayList<>(state.serverResults))
                 .pendingClientCalls(new ArrayList<>(state.pendingClientCalls))
                 .assistant_summary(Optional.ofNullable(state.assistantSummary).orElse(""))
