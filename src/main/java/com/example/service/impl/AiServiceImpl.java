@@ -2414,11 +2414,15 @@ public class AiServiceImpl implements AiService {
             maybePersistStepDraft(state);
         }
         maybePersistStepMemory(state);
+        OrchestrationStep.Context emptyCtx = OrchestrationStep.Context.builder()
+                .messages(List.of())
+                .build();
+
         OrchestrationStep step = OrchestrationStep.builder()
                 .stepId(state.stepId)
                 .finished(state.finished)
                 .remainingLoops(state.remainingLoops)
-                .context(buildContextSummary(state.conversation))
+                .context(emptyCtx) // 不回传历史
                 .serverResults(new ArrayList<>(state.serverResults))
                 .pendingClientCalls(new ArrayList<>(state.pendingClientCalls))
                 .assistant_summary(Optional.ofNullable(state.assistantSummary).orElse(""))
