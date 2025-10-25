@@ -86,6 +86,9 @@ public class AiServiceImpl implements AiService {
     private final AiProperties.Mode aiMode;
     private final String model;
 
+    @Value("${ai.setpjson.context-window:0}")
+    private int setpjsonContextWindow;
+
     @Value("${ai.think.enabled:false}")
     private boolean thinkEnabled;
 
@@ -116,8 +119,8 @@ public class AiServiceImpl implements AiService {
     @Value("${ai.client.retry.backoff-ms:300}")
     private long clientRetryBackoffMs;
 
-    @Value("${ai.stepjson.heartbeat-seconds:5}")
-    private long stepJsonHeartbeatSeconds;
+    @Value("${ai.setpjson.heartbeat-seconds:5}")
+    private long setpjsonHeartbeatSeconds;
 
     public AiServiceImpl(
             SpringAiChatGateway chatGateway,
@@ -1746,7 +1749,7 @@ public class AiServiceImpl implements AiService {
                     .data(state.startedData())
                     .build()));
 
-            state.heartbeat = Flux.interval(Duration.ofSeconds(Math.max(1L, stepJsonHeartbeatSeconds)))
+            state.heartbeat = Flux.interval(Duration.ofSeconds(Math.max(1L, setpjsonHeartbeatSeconds)))
                     .subscribe(tick -> {
                         if (!completed.get()) {
                             sink.next(toNdjson(NdjsonEvent.builder()
@@ -1818,20 +1821,42 @@ public class AiServiceImpl implements AiService {
         payload.put("messages", messages);
         attachScope(payload, state.userId, state.conversationId);
 
-        boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
-        if (hasClientTools) {
-            payload.put("tools", state.clientTools);
-            payload.put("tool_choice", "required");
-        } else if (!state.mergedTools.isEmpty()) {
+        // ✅ 统一使用 mergedTools（server + client），让模型“看得见”服务端工具，并保持外部化（由网关按 client schema 触发 proxy）
+        if (!state.mergedTools.isEmpty()) {
             payload.put("tools", state.mergedTools);
-            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
+            payload.put("tool_choice", "auto"); // 让模型自由选择（避免强制只挑 client）
         } else {
             payload.put("tool_choice", "none");
         }
 
+        // 诊断：看 merged 中到底有哪些函数名
+        try {
+            List<String> mergedNames = state.mergedTools.stream()
+                    .map(this::extractFunctionName)
+                    .filter(Objects::nonNull)
+                    .toList();
+            log.debug("[V2] mergedTools={}", mergedNames);
+        } catch (Exception ignore) {}
+
         return callChatCompletions(payload, false)
+                // 诊断：打印聚合后的 tool_calls
+                .doOnNext(json -> {
+                    try {
+                        JsonNode msg = mapper.readTree(json).path("choices").path(0).path("message");
+                        if (msg.has("tool_calls")) {
+                            List<String> names = new ArrayList<>();
+                            for (JsonNode tc : msg.path("tool_calls")) {
+                                names.add(tc.path("function").path("name").asText(""));
+                            }
+                            log.debug("[V2] aggregated tool_calls={}", names);
+                        } else {
+                            log.debug("[V2] aggregated tool_calls=[]");
+                        }
+                    } catch (Exception ignore) {}
+                })
                 .map(json -> new DecisionPayload(parseDecision(json), json, extractContentSafely(json)));
     }
+
 
     private Mono<Void> handleDecision(StepState state, FluxSink<String> sink, DecisionPayload payload) {
         return Mono.defer(() -> {
@@ -1841,36 +1866,36 @@ public class AiServiceImpl implements AiService {
                 state.assistantSummary = summary;
             }
 
-        if (decision == null || !decision.hasToolCalls()) {
-            if (!state.clientToolNames.isEmpty()) {
-                ToolCallDTO fallback = buildClientToolFallback(state, summary);
-                if (fallback != null) {
-                    state.pendingClientCalls.add(fallback);
-                    sink.next(toNdjson(NdjsonEvent.builder()
-                            .event("pendingClientCalls")
-                            .ts(now())
-                            .data(Map.of("calls", List.of(fallback)))
-                            .build()));
-                    state.finished = false;
-                    state.remainingLoops = Math.max(0, maxToolLoops - 1);
-                    if (summary != null && !summary.isBlank()) {
-                        state.assistantSummary = summary;
-                    } else if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                        state.assistantSummary = "等待客户端工具执行";
+            if (decision == null || !decision.hasToolCalls()) {
+                if (!state.clientToolNames.isEmpty()) {
+                    ToolCallDTO fallback = buildClientToolFallback(state, summary);
+                    if (fallback != null) {
+                        state.pendingClientCalls.add(fallback);
+                        sink.next(toNdjson(NdjsonEvent.builder()
+                                .event("pendingClientCalls")
+                                .ts(now())
+                                .data(Map.of("calls", List.of(fallback)))
+                                .build()));
+                        state.finished = false;
+                        state.remainingLoops = Math.max(0, maxToolLoops - 1);
+                        if (summary != null && !summary.isBlank()) {
+                            state.assistantSummary = summary;
+                        } else if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
+                            state.assistantSummary = "等待客户端工具执行";
+                        }
+                        emitStep(sink, state);
+                        return Mono.empty();
                     }
-                    emitStep(sink, state);
-                    return Mono.empty();
                 }
+                if (summary != null && !summary.isBlank()) {
+                    state.conversation.add(createMessage("assistant", summary));
+                    state.finalAnswer = summary;
+                }
+                state.finished = true;
+                state.remainingLoops = 0;
+                emitStep(sink, state);
+                return Mono.empty();
             }
-            if (summary != null && !summary.isBlank()) {
-                state.conversation.add(createMessage("assistant", summary));
-                state.finalAnswer = summary;
-            }
-            state.finished = true;
-            state.remainingLoops = 0;
-            emitStep(sink, state);
-            return Mono.empty();
-        }
 
             List<ToolCall> toolCalls = decision.getToolCalls();
             List<AiToolExecutor.ToolCall> allCalls = new ArrayList<>();
@@ -1895,6 +1920,13 @@ public class AiServiceImpl implements AiService {
                     clientCalls.add(buildToolCallDto(call, ExecTarget.CLIENT, arguments));
                 }
             }
+
+            // 诊断：模型选择 vs 分流结果
+            try {
+                log.debug("[V2] model.toolCalls={}", toolCalls.stream().map(ToolCall::getName).toList());
+                log.debug("[V2] split.server={}", serverCalls.stream().map(AiToolExecutor.ToolCall::name).toList());
+                log.debug("[V2] split.client={}", clientCalls.stream().map(ToolCallDTO::getName).toList());
+            } catch (Exception ignore) {}
 
             if (!allCalls.isEmpty()) {
                 state.conversation.add(toolExecutor.toAssistantToolCallsMessage(allCalls));
@@ -1939,6 +1971,7 @@ public class AiServiceImpl implements AiService {
         });
     }
 
+
     private Mono<Void> continueAfterServerTools(StepState state, FluxSink<String> sink, String fallbackSummary) {
         sink.next(toNdjson(progressEvent("continuing")));
 
@@ -1948,16 +1981,14 @@ public class AiServiceImpl implements AiService {
         payload.put("messages", messages);
         attachScope(payload, state.userId, state.conversationId);
 
+        String clientChoice = normalizeToolChoice(state.request != null ? state.request.getToolChoice() : null);
         boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
-        if (hasClientTools) {
-            payload.put("tools", state.clientTools);
-            payload.put("tool_choice", "required");
-        } else if (!state.mergedTools.isEmpty()) {
-            payload.put("tools", state.mergedTools);
-            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
-        } else {
-            payload.put("tool_choice", "none");
-        }
+        boolean allowClientTools = hasClientTools && !"none".equals(clientChoice);
+        // 允许多轮：续写阶段继续暴露 server+client 工具，并统一交给模型 auto 决策
+        payload.put("tools", state.mergedTools);
+        payload.put("tool_choice", clientChoice);
+
+        log.debug("[V2] continueAfterServerTools tool_choice=auto (server+client visible)");
 
         return callChatCompletions(payload, false)
                 .flatMap(json -> {
@@ -1971,6 +2002,8 @@ public class AiServiceImpl implements AiService {
 
                     if (followUp != null && followUp.hasToolCalls()) {
                         ToolCallSplit split = splitToolCalls(followUp.getToolCalls(), state);
+
+                        // 客户端工具：并行下发给前端，不阻塞服务端回路
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
                             sink.next(toNdjson(NdjsonEvent.builder()
@@ -1978,24 +2011,51 @@ public class AiServiceImpl implements AiService {
                                     .ts(now())
                                     .data(Map.of("calls", split.client()))
                                     .build()));
-                            state.finished = false;
-                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
-                            emitStep(sink, state);
-                            return Mono.empty();
                         }
+
+                        // 服务端工具：执行后递归进入下一轮续写（受 loops 限制）
                         if (!split.server().isEmpty()) {
-                            log.warn("Follow-up produced {} server tool call(s) after single-round execution", split.server().size());
-                            state.finished = false;
-                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
-                            if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                                state.assistantSummary = "Additional server-side actions will run in the next loop";
+                            if (state.remainingLoops == null) {
+                                state.remainingLoops = Math.max(0, maxToolLoops - 1);
                             }
-                            emitStep(sink, state);
-                            return Mono.empty();
+                            if (state.remainingLoops <= 0) {
+                                log.warn("Follow-up has {} server tool call(s) but loops exhausted", split.server().size());
+                            } else {
+                                // 组装执行入参 + 把 “assistant tool_calls” 消息补进对话
+                                List<AiToolExecutor.ToolCall> execCalls = new ArrayList<>();
+                                Map<String, String> nameById = new LinkedHashMap<>();
+                                for (ToolCallDTO c : split.server()) {
+                                    String argsJson = safeArgsJson(c.getArguments(), c.getName(), c.getId());
+                                    execCalls.add(new AiToolExecutor.ToolCall(c.getId(), c.getName(), argsJson));
+                                    nameById.put(c.getId(), c.getName());
+                                }
+                                state.conversation.add(toolExecutor.toAssistantToolCallsMessage(execCalls));
+
+                                return Mono.fromCallable(() -> executeServerCalls(execCalls, state, nameById))
+                                        .subscribeOn(Schedulers.boundedElastic())
+                                        .flatMap(res -> {
+                                            if (!res.messages().isEmpty()) {
+                                                state.conversation.addAll(res.messages());
+                                            }
+                                            if (!res.results().isEmpty()) {
+                                                state.serverResults.addAll(res.results());
+                                                sink.next(toNdjson(NdjsonEvent.builder()
+                                                        .event("serverResults")
+                                                        .ts(now())
+                                                        .data(Map.of("results", res.results()))
+                                                        .build()));
+                                            }
+                                            state.remainingLoops = Math.max(0, state.remainingLoops - 1);
+                                            // 递归进入下一轮续写
+                                            return continueAfterServerTools(state, sink, state.assistantSummary);
+                                        });
+                            }
                         }
                     }
 
-                    ToolCallDTO fallback = state.pendingClientCalls.isEmpty()
+
+                    // 关键改动：仅当允许客户端工具时才启用 fallback（避免前端传 none 时又被 fallback 打开工具）
+                    ToolCallDTO fallback = (allowClientTools && state.pendingClientCalls.isEmpty())
                             ? buildClientToolFallback(state, content)
                             : null;
                     if (fallback != null) {
@@ -2022,6 +2082,7 @@ public class AiServiceImpl implements AiService {
                 });
     }
 
+
     private Mono<Void> continueWithoutDecision(StepState state, FluxSink<String> sink) {
         List<Map<String, Object>> messages = new ArrayList<>(state.conversation);
         Map<String, Object> payload = new HashMap<>();
@@ -2029,16 +2090,16 @@ public class AiServiceImpl implements AiService {
         payload.put("messages", messages);
         attachScope(payload, state.userId, state.conversationId);
 
+        // === 关键改动：没有新决策时，也只按前端 toolChoice，且仅暴露「客户端工具」
+        String clientChoice = normalizeToolChoice(state.request != null ? state.request.getToolChoice() : null);
         boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
-        if (hasClientTools) {
-            payload.put("tools", state.clientTools);
-            payload.put("tool_choice", "required");
-        } else if (!state.mergedTools.isEmpty()) {
-            payload.put("tools", state.mergedTools);
-            payload.put("tool_choice", normalizeToolChoice(state.request.getToolChoice()));
-        } else {
-            payload.put("tool_choice", "none");
-        }
+        boolean allowClientTools = hasClientTools && !"none".equals(clientChoice);
+
+        payload.put("tools", state.mergedTools);
+        payload.put("tool_choice", "auto");
+
+        log.debug("[V2] continueWithoutDecision clientChoice={} hasClientTools={} allowClientTools={}",
+                clientChoice, hasClientTools, allowClientTools);
 
         return callChatCompletions(payload, false)
                 .flatMap(json -> {
@@ -2050,6 +2111,7 @@ public class AiServiceImpl implements AiService {
 
                     if (followUp != null && followUp.hasToolCalls()) {
                         ToolCallSplit split = splitToolCalls(followUp.getToolCalls(), state);
+
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
                             sink.next(toNdjson(NdjsonEvent.builder()
@@ -2057,26 +2119,49 @@ public class AiServiceImpl implements AiService {
                                     .ts(now())
                                     .data(Map.of("calls", split.client()))
                                     .build()));
-                            state.finished = false;
-                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
-                            emitStep(sink, state);
-                            return Mono.empty();
                         }
+
                         if (!split.server().isEmpty()) {
-                            log.warn("Continuation produced {} server tool call(s) without new prompt", split.server().size());
-                            state.finished = false;
-                            state.remainingLoops = Math.max(0, maxToolLoops - 1);
-                            if (state.assistantSummary == null || state.assistantSummary.isBlank()) {
-                                state.assistantSummary = "Server-side processing will continue in the next loop";
+                            if (state.remainingLoops == null) {
+                                state.remainingLoops = Math.max(0, maxToolLoops - 1);
                             }
-                            emitStep(sink, state);
-                            return Mono.empty();
+                            if (state.remainingLoops <= 0) {
+                                log.warn("Continuation has {} server tool call(s) but loops exhausted", split.server().size());
+                            } else {
+                                List<AiToolExecutor.ToolCall> execCalls = new ArrayList<>();
+                                Map<String, String> nameById = new LinkedHashMap<>();
+                                for (ToolCallDTO c : split.server()) {
+                                    String argsJson = safeArgsJson(c.getArguments(), c.getName(), c.getId());
+                                    execCalls.add(new AiToolExecutor.ToolCall(c.getId(), c.getName(), argsJson));
+                                    nameById.put(c.getId(), c.getName());
+                                }
+                                state.conversation.add(toolExecutor.toAssistantToolCallsMessage(execCalls));
+
+                                return Mono.fromCallable(() -> executeServerCalls(execCalls, state, nameById))
+                                        .subscribeOn(Schedulers.boundedElastic())
+                                        .flatMap(res -> {
+                                            if (!res.messages().isEmpty()) {
+                                                state.conversation.addAll(res.messages());
+                                            }
+                                            if (!res.results().isEmpty()) {
+                                                state.serverResults.addAll(res.results());
+                                                sink.next(toNdjson(NdjsonEvent.builder()
+                                                        .event("serverResults")
+                                                        .ts(now())
+                                                        .data(Map.of("results", res.results()))
+                                                        .build()));
+                                            }
+                                            state.remainingLoops = Math.max(0, state.remainingLoops - 1);
+                                            // 递归续写
+                                            return continueWithoutDecision(state, sink);
+                                        });
+                            }
                         }
                     }
 
-                    ToolCallDTO fallback = state.pendingClientCalls.isEmpty()
-                            ? buildClientToolFallback(state, content)
-                            : null;
+
+                    ToolCallDTO fallback = (state.pendingClientCalls.isEmpty())
+                            ? buildClientToolFallback(state, content) : null;
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
                         sink.next(toNdjson(NdjsonEvent.builder()
@@ -2099,6 +2184,19 @@ public class AiServiceImpl implements AiService {
                     emitStep(sink, state);
                     return Mono.empty();
                 });
+    }
+
+    private String safeArgsJson(@Nullable Map<String, Object> args, String toolName, String callId) {
+        if (args == null || args.isEmpty()) return "{}";
+        try {
+            return mapper.writeValueAsString(args);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("Failed to serialize tool arguments for {} (id={}): {}", toolName, callId, e.toString());
+            return "{}";
+        } catch (Exception e) {
+            log.warn("Unexpected error serializing tool arguments for {} (id={}): {}", toolName, callId, e.toString());
+            return "{}";
+        }
     }
 
     private ServerExecutionResult executeServerCalls(List<AiToolExecutor.ToolCall> serverCalls,

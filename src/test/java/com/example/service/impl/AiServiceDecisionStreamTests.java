@@ -1,5 +1,7 @@
 package com.example.service.impl;
 
+import com.example.ai.SpringAiChatGateway;
+import com.example.config.AiProperties;
 import com.example.service.ConversationMemoryService;
 import com.example.tools.AiToolExecutor;
 import com.example.tools.ToolRegistry;
@@ -8,7 +10,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -24,15 +25,20 @@ class AiServiceDecisionStreamTests {
     void setUp() {
         mapper = new ObjectMapper();
 
+        // ✅ 新签名：传入 SpringAiChatGateway 和 AiProperties
+        SpringAiChatGateway chatGateway = Mockito.mock(SpringAiChatGateway.class);
+
+        AiProperties props = new AiProperties();
+        props.setMode(AiProperties.Mode.OPENAI);   // 测试用 OPENAI 路径，才能走 OpenAI 风格合并
+        props.setModel("test-model");
+
         service = new AiServiceImpl(
-                WebClient.builder().baseUrl("http://localhost").build(),
+                chatGateway,
                 mapper,
                 Mockito.mock(ConversationMemoryService.class),
                 Mockito.mock(ToolRegistry.class),
                 Mockito.mock(AiToolExecutor.class),
-                "OPENAI",
-                "/v1/chat/completions",
-                "test-model"
+                props
         );
     }
 

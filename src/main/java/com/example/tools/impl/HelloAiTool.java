@@ -1,5 +1,6 @@
 package com.example.tools.impl;
 
+import com.example.ai.tools.AiToolComponent;
 import com.example.tools.AiTool;
 import com.example.tools.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 @Slf4j
-@Component
+@AiToolComponent
 @RequiredArgsConstructor
 public class HelloAiTool implements AiTool {
 
@@ -29,7 +30,7 @@ public class HelloAiTool implements AiTool {
     }
 
     @Override
-    public Map<String, Object> openAiJsonSchema() {
+    public Map<String, Object> parametersSchema() {
         // 无参数工具
         return Map.of(
                 "type", "object",

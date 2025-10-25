@@ -30,7 +30,7 @@ import java.util.Map;
  * summary for LLM consumption.</p>
  *
  * <p>Sequence: model issues a tool call → Spring AI resolves the callback by name →
- * {@link #callDelegating(AiTool, String, ToolContext)} parses/validates input →
+ *  parses/validates input →
  * {@link AiTool#execute(Map)} runs → result JSON is merged into the response envelope.</p>
  */
 @Component
@@ -177,7 +177,7 @@ public class SpringAiToolAdapter {
 
     private String toSchema(AiTool tool) {
         try {
-            return mapper.writeValueAsString(tool.openAiJsonSchema());
+            return mapper.writeValueAsString(tool.parametersSchema());
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize tool schema for " + tool.name(), e);
         }

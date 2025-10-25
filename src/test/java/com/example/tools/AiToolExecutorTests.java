@@ -78,7 +78,7 @@ class AiToolExecutorTests {
         }
 
         @Override
-        public Map<String, Object> openAiJsonSchema() {
+        public Map<String, Object> parametersSchema() {
             return Map.of();
         }
 

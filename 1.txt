@@ -1,148 +1,183 @@
-你是一名资深 Spring WebFlux + Spring AI 工程师。请对一个已有的 Java/Spring Boot WebFlux 项目进行最小侵入的局部改造：把当前自研的 AI 客户端与工具编排逻辑，切换到 Spring AI（保留现有接口与流式行为）。
-
-代码背景（已存在）
-	•	框架：Spring Boot（WebFlux）、Reactor。
-	•	关键类：
-	•	com.example.service.AiService / AiServiceImpl：编排“一次性/流式聊天”和“v2 两阶段：decide → 执行工具 → continue”。
-	•	com.example.controller.ChatController：对外接口 /ai/chat（GET）、/ai/stream（SSE）、/ai/decide（POST）、/ai/decide/stream（SSE）、/ai/continue、/ai/v2/chat、/ai/v2/chat/stream。
-	•	com.example.service.ConversationMemoryService 与实现：负责历史与关键词记忆（内存版与数据库版）。
-	•	com.example.tool.ToolRegistry + AiToolExecutor + FindRelevantMemoryTool：工具注册与执行。
-	•	数据表（若涉及 DB）：java_ai.conversation_messages（含 DRAFT/FINAL、step_id、seq 等字段）。
-
-改造目标：“替换 AI 模型调用与工具调用层”为 Spring AI，实现 OPENAI/Ollama 双模可配；保留 Controller 的入参/出参与 SSE 语义；保留/复用现有的内存与 DB 记忆接口。
-
-⸻
-
-产出要求（重要）
-	1.	保留所有现有 REST 接口路由与签名，不破坏前端/自动化测试。
-	2.	引入 Spring AI 并实现：
-	•	ChatModel 与 ChatClient（OpenAI 与 Ollama 至少支持其一，可通过配置切换）。
-	•	流式输出（SSE）：把 Spring AI 的流式响应映射到现有的 text/event-stream 事件（与当前输出一致或更合理）。
-	•	工具（function-calling）：用 Spring AI 的工具机制包装现有 ToolRegistry 的工具；保持“自动/手动工具调用”的两阶段流程。
-	3.	最小改动：控制层不大动，主要替换 AiServiceImpl 的“模型调用 + 工具调用”实现；为 Spring AI 新增配置类/适配器类。
-	4.	完整可编译：给出 pom.xml 依赖变更、application.yaml 示例、必要的新类/配置。
-	5.	提供统一 Diff 或逐文件补丁：用 diff --git 风格或清晰的“文件路径 + 完整代码块”。避免只给片段。
-	6.	回归用例：给出 curl/Swagger 示例请求，覆盖 /ai/chat、/ai/stream、/ai/decide、/ai/v2/chat。
-
-⸻
-
-具体改造任务
-
-A. 依赖与配置
-	1.	修改 pom.xml，新增（请给出确切 groupId/artifactId/版本，并说明与 Spring Boot 版本兼容性）：
-	•	Spring AI OpenAI Starter（和/或）Ollama Starter。
-	•	Jackson/Validation 若需要的额外依赖。
-	2.	在 application.yaml 增加：
-
-spring:
-  ai:
-    openai:
-      api-key: ${OPENAI_API_KEY:}
-      base-url: ${OPENAI_BASE_URL:}   # 可选，兼容代理/镜像
-      chat:
-        options:
-          model: gpt-4o-mini           # 示例，可通过自定义属性覆盖
-          temperature: 0.2
-    ollama:
-      base-url: http://localhost:11434
-      chat:
-        options:
-          model: qwen3:8b
-          temperature: 0.2
-
-ai:
-  mode: OPENAI   # 或 OLLAMA
-  tools:
-    max-loops: 2
-  memory:
-    storage: in-memory  # 或 database
-
-要求：给出同名属性的 @ConfigurationProperties 绑定类或直接在配置类读取。
-
-B. 基础 Bean 与 ChatClient
-
-新增 com.example.config.SpringAiConfig：
-	•	根据 ai.mode 条件装配 ChatModel（OpenAIChatModel 或 OllamaChatModel）。
-	•	暴露 ChatClient Bean：ChatClient.builder(chatModel).build()（或当下 Spring AI 推荐方式）。
-	•	说明如何设置超时、重试、日志。
-
-C. 工具适配（Spring AI ↔ 现有 ToolRegistry）
-
-新增 com.example.ai.tools.McpLikeToolAdapter（命名随意）：
-	•	将现有 ToolRegistry 中的每个工具，包装成 Spring AI 的工具回调（例如 FunctionCallback 或官方提供的 Tool API）。
-	•	入参：沿用现有 JSON schema/Map<String,Object>。
-	•	出参：返回结构化 JSON（保持你项目的 tool 消息格式），并把文本结果同时放入模型可读的 text。
-	•	支持自动与手动调用：
-	•	自动：模型函数调用 → 调用 ToolRegistry → 结果回注给模型。
-	•	手动：沿用现有 /ai/decide → /ai/continue 两阶段流程（即先让模型“建议工具/参数”，再由后端执行，最后“续写回答”）。
-
-请给出一个把 FindRelevantMemoryTool 暴露为 Spring AI 工具的完整示例，包括：输入 schema、参数校验、异常映射。
-
-D. 替换 AiServiceImpl
-	1.	非流式：用 ChatClient 构造消息（system + limited history + user），可选携带 tools，得到一次性回答。
-	2.	流式（SSE）：使用 Spring AI 的流式 API（如 stream(...)），将增量内容映射为 ServerSentEvent，兼容当前前端解析。
-	•	要求：在 SSE 里保留你系统原有的阶段事件（如 stage: decision/chunk/final），或给出兼容的简化版。
-	3.	v2 两阶段：
-	•	decide: 让模型仅输出工具名与参数（或使用工具自动调用但只返回计划），落盘 DRAFT。
-	•	工具执行：调用适配器执行真实工具。
-	•	continue: 把工具结果作为 tool/assistant 上文注入，再次调用 ChatClient 得到最终 FINAL。
-	4.	记忆：保持对 ConversationMemoryService 的调用不变。若有精力，演示如何把历史摘要/检索结果拼接到 prompt。
-
-E. 控制层（尽量只做极小变更）
-	•	如需改动 ChatController，仅限于：SSE 的 MediaType、Flux<ServerSentEvent<String>> 的构造方式，或异常映射的细节。
-	•	保证原有 curl/Swagger 用法不变。
-
-⸻
-
-交付物格式（示例）
-	1.	pom.xml 完整 diff（含版本号）
-	2.	新增文件（给出完整代码）：
-	•	com/example/config/SpringAiConfig.java
-	•	com/example/ai/tools/ToolAdapters.java（或分文件）
-	3.	修改文件（给出完整类代码或最小 diff）：
-	•	com/example/service/impl/AiServiceImpl.java
-	•	（如有）com/example/controller/ChatController.java
-	4.	application.yaml 片段（可运行的最小配置）
-	5.	回归测试命令：
-
-# 一次性
-curl "http://localhost:8080/ai/chat?q=你好"
-
-# 流式
-curl -N -H "Accept: text/event-stream" "http://localhost:8080/ai/stream?q=你好"
-
-# v2: decide
-curl -H "Content-Type: application/json" -X POST http://localhost:8080/ai/decide -d '{
-  "mode":"OPENAI",
-  "model":"gpt-4o-mini",
-  "messages":[{"role":"user","content":"查询东京明天天气"}],
-  "tools":[{"type":"function","function":{"name":"web_search","parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}}]
-}'
-
-# v2: continue
-curl -H "Content-Type: application/json" -X POST http://localhost:8080/ai/continue -d '{
-  "decisionId":"<from-decide>",
-  "toolResult":{"web_search":{"snippets":["..."]}}
-}'
 
 
+# 角色
 
-⸻
+你是资深 Java/Spring Boot WebFlux + Spring AI 工程师。请在不破坏现有编排与接口的前提下，完成下面的修复并提交**最小侵入式补丁**（diff）。
 
-质量与验收标准
-	•	编译通过、应用可启动，/ai/* 接口全部可用（含 SSE）。
-	•	切换 ai.mode=OPENAI/OLLAMA 均可工作（若只实现其一，请明确说明并给出另一种最小接入示例）。
-	•	工具调用：模型能识别到至少一个本地工具（如 FindRelevantMemoryTool），并成功通过 Spring AI 执行。
-	•	无破坏性变更：控制层路由、DTO、响应结构保持兼容；SSE 能持续输出增量文本。
-	•	关键路径有日志与异常处理（超时、重试、工具失败的降级说明）。
+# 项目上下文（已存在）
 
-⸻
+* 后端：Java / Spring Boot WebFlux / Reactor
+* 已有编排：`AiServiceImpl`（多轮 loop、SSE NDJSON、遇前端工具下发 `tool_request`、前端执行后 `/ai/continue` 回填 `role=tool`）
+* 工具治理：`ToolRegistry` + `AiToolExecutor`（服务端工具）
+* Spring AI 已接入：`SpringAiChatGateway` 封装 `ChatClient` 调用
+* 前端请求示例（关键字段）：
 
-代码风格与注释
-	•	使用 @Slf4j，对外依旧返回简洁错误，对内记录 root cause。
-	•	关键新增类写 类级注释：职责、与旧实现的边界、可扩展点。
-	•	对工具适配器写 时序注释：model → tool_call → ToolRegistry → result → model。
+```json
+{
+  "userId":"u10",
+  "conversationId":"c1",
+  "q":"严格要求：先调用服务端工具 find_relevant_memory ... 允许调用客户端 open_url ...",
+  "toolChoice":"auto",
+  "responseMode":"step-json-ndjson",
+  "clientTools":[
+    {"type":"function","function":{
+      "name":"open_url",
+      "description":"在浏览器中打开指定链接",
+      "parameters":{"type":"object","properties":{"url":{"type":"string","format":"uri"}},"required":["url"]},
+      "x-execTarget":"client"
+    }}
+  ]
+}
+```
 
-⸻
+* 需求：**前端工具**放在 `clientTools` 且 `x-execTarget:"client"`；**后端工具**由后端执行；模型应能“看到”前端工具（产出 `tool_call`），但不要在后端执行它；`toolChoice`（字符串或对象）要完整生效；每轮**收窄**可见的函数集合。
 
-请严格按以上要求输出：完整 diff 或完整类文件 + 可运行示例配置 + 回归命令。若 Spring AI 各版本 API 有出入，请以“当前稳定版的官方推荐用法”为准并在注释中说明。
+# 要解决的问题
+
+现在“前端工具即使强制也不被调用”，原因是网关层未把前端工具定义提供给模型，或把可见函数清空，或丢失了对象形态的 `toolChoice`，并且后端可能“抢跑”执行。
+
+# 目标（必须全部达成）
+
+1. **前端工具“可见但不执行”**：注册“仅定义”的 `FunctionCallback`（只提供 name/parameters/description，`call()` 抛异常或占位），使模型可以产出该工具的 `tool_call`；
+2. **后端工具可执行**：仍保留 Spring AI 对后端工具的可执行回调（不要求全局关闭内部执行）；
+3. **收窄 & 强制**：每轮根据请求构建 `allowed` 函数名集合；若 `toolChoice` 为对象且指定函数名，则 `allowed={该函数}`；
+4. **`toolChoice` 原样透传**：支持字符串（`auto|none|required`）与对象（`{"type":"function","function":{"name":"xxx"}}`），不要改丢对象形态；
+5. **编排保持不变**：仍由 `AiServiceImpl` 分流：前端工具 → 下发 `tool_request`；后端工具 → 本地执行并注入 `role=tool`；支持 `/ai/continue` 回填继续。
+
+# 修改范围（仅限）
+
+* **必须修改**：`com.example.ai.SpringAiChatGateway`（或你工程里等价的网关封装类）
+* **可选小改**：在 `AiServiceImpl` 发出的 `tool_request` 事件中附带 `execTarget`（若已有映射可不改）
+* **不得修改**：公共接口契约、控制器 URL、已有 DTO 命名（除非为适配新增字段）
+
+# 实施细节（务必按此实现）
+
+1. 在 `SpringAiChatGateway` 里：
+
+   * 解析并合并**两处**工具定义：`payload.clientTools[*]` 与 `payload.tools[*]`；
+   * 识别 `x-execTarget`：默认 `"server"`，显式 `"client"` 视为前端工具；
+   * 解析 `toolChoice`（兼容别名 `tool_choice`），新增方法 `forcedFunctionName(Object toolChoice)`，若对象形态指定了函数名，则返回该名；
+   * 构建 `allowed`：若存在强制名则仅该函数，否则为“本次请求出现的所有函数名（前端+后端）”；
+   * **后端回调集合**：从 `toolAdapter.functionCallbacks()` 里筛选 `name ∈ allowed`；
+   * **前端定义回调集合**：对 `name ∈ allowed` 且 `x-execTarget=="client"` 且**后端无同名回调**的工具，创建 `FunctionCallback`：
+
+     * `getName()` 返回工具名；
+     * `getInputTypeSchema()` 直接使用前端传来的 JSON Schema；
+     * `call(...)` 抛 `UnsupportedOperationException("frontend tool: " + name)`（避免后端误执行）；
+   * `OpenAiChatOptions`：
+
+     * `.functions(allowed)` 或 `.toolNames(allowed)`（依据项目使用的 API）；
+     * `.functionCallbacks(后端回调 ∪ 前端定义回调)`；
+     * **不要**因为“没有后端回调”就把 `functions` 清空；
+     * `.toolChoice(toolChoice)`：字符串或 Map 原样设置（不要转换/丢弃对象形态）；
+     * 是否 `.internalToolExecutionEnabled(false)`：**默认不改动**（保留你们现在“后端自动执行”的习惯）；如未来想统一受控再关闭。
+   * **日志**（DEBUG）：
+
+     * `[TOOLS-ALLOWED]` 打印 `allowed`；
+     * `[CB-REGISTERED] server=<names> client-def=<names>`；
+     * `[TOOL-CHOICE]` 打印传入的 `toolChoice`；
+2. （可选）在 `AiServiceImpl` 的 SSE `tool_request` 事件 payload 里补充 `execTarget:"client"` 字段，方便前端做路由（若已有映射可忽略）。
+
+# 代码骨架（请融合到网关类）
+
+* 新增内部记录类型：
+
+```java
+record ToolDef(String name, String desc, JsonNode schema, String execTarget) {}
+```
+
+* 新增方法：
+
+```java
+// 解析 clientTools + tools，提取 name/desc/schema/execTarget
+private List<ToolDef> parseAllToolDefs(Map<String,Object> payload);
+
+// 解析对象形态 toolChoice，返回被强制的函数名或 null
+private @Nullable String forcedFunctionName(Object toolChoice);
+
+// 构建回调：后端保留原回调，前端生成“仅定义回调”
+private List<FunctionCallback> buildCallbacks(List<ToolDef> defs, Set<String> allowed, List<FunctionCallback> serverCallbacks);
+```
+
+* 在构建 `OpenAiChatOptions` 时：
+
+```java
+List<ToolDef> defs = parseAllToolDefs(payload);
+Object toolChoice = payload.getOrDefault("toolChoice", payload.get("tool_choice"));
+String forced = forcedFunctionName(toolChoice);
+
+Set<String> allowed = (forced != null)
+    ? Set.of(forced)
+    : defs.stream().map(ToolDef::name).collect(Collectors.toCollection(LinkedHashSet::new));
+
+List<FunctionCallback> serverCallbacks = toolAdapter.functionCallbacks().stream()
+    .filter(cb -> allowed.contains(cb.getName()))
+    .toList();
+
+List<FunctionCallback> clientDefCallbacks = buildCallbacks(defs, allowed, serverCallbacks);
+
+OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+    .functions(allowed)
+    .functionCallbacks(Stream.concat(serverCallbacks.stream(), clientDefCallbacks.stream()).toList())
+    .parallelToolCalls(true); // 可选
+
+if (toolChoice instanceof String s) b.toolChoice(s);
+else if (toolChoice != null) b.toolChoice(toolChoice);
+
+log.debug("[TOOLS-ALLOWED] {}", allowed);
+log.debug("[CB-REGISTERED] server={}, client-def={}",
+    serverCallbacks.stream().map(FunctionCallback::getName).toList(),
+    clientDefCallbacks.stream().map(FunctionCallback::getName).toList());
+log.debug("[TOOL-CHOICE] {}", toolChoice);
+
+return b.build();
+```
+
+# 验收标准（必须全通过）
+
+1. **前端-only 强制**：请求只包含 `clientTools=[open_url]` 且 `toolChoice={"type":"function","function":{"name":"open_url"}}` → 模型返回的 `tool_calls[0].function.name=="open_url"`，后端不执行，SSE 下发 `tool_request`。
+2. **混合 + 强制前端**：同时提供 `find_relevant_memory`（后端）与 `open_url`（前端），`toolChoice` 指向 `open_url` → 仅出现 `open_url` 的 `tool_call` 并下发给前端。
+3. **混合 + 强制后端**：强制 `find_relevant_memory` → 直接由后端执行并注入 `role=tool`，进入下一轮。
+4. **`toolChoice:"none"`**：无 `tool_calls`，直接生成文本回答。
+5. **日志**：出现上述三条 DEBUG 日志，且 `client-def` 显示前端工具名。
+
+# 手工测试（示例）
+
+```bash
+# 1) 强制前端工具
+curl -N -H "Accept: text/event-stream" -H "Content-Type: application/json" \
+  -X POST http://localhost:8080/ai/decide/stream \
+  -d '{
+    "mode":"OPENAI","model":"gpt-4o-mini",
+    "messages":[{"role":"user","content":"请打开官网 https://example.com"}],
+    "clientTools":[{"type":"function","function":{
+      "name":"open_url","description":"open","parameters":{"type":"object","properties":{"url":{"type":"string","format":"uri"}},"required":["url"]},"x-execTarget":"client"}}],
+    "toolChoice":{"type":"function","function":{"name":"open_url"}}
+  }'
+
+# 2) 混合，自动选择（期望：先 find_relevant_memory，再可能出现 open_url）
+curl -N -H "Accept: text/event-stream" -H "Content-Type: application/json" \
+  -X POST http://localhost:8080/ai/decide/stream \
+  -d '{"mode":"OPENAI","model":"gpt-4o-mini","messages":[{"role":"user","content":"先查记忆再回答，可选打开官网"}],
+       "tools":[{"type":"function","function":{"name":"find_relevant_memory","parameters":{"type":"object","properties":{"query":{"type":"string"},"maxMessages":{"type":"integer"}},"required":["query"]}}}],
+       "clientTools":[{"type":"function","function":{"name":"open_url","parameters":{"type":"object","properties":{"url":{"type":"string","format":"uri"}},"required":["url"]},"x-execTarget":"client"}}],
+       "toolChoice":"auto"}'
+```
+
+# 交付物
+
+* 修改后的 Java 源码（按上述位置与方法）
+* 提交信息：
+
+```
+fix(tools): expose client tools to model, honor object toolChoice, narrow functions per call; keep server tools executable; emit debug logs
+```
+
+# 额外要求
+
+* **不要**更改公开接口签名与返回格式；
+* **不要**删除现有编排逻辑；
+* 单测/手测通过上述验收标准；
+* 代码风格与现有项目保持一致（lombok/日志/命名）。
+
+---

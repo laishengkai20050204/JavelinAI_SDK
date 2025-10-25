@@ -7,7 +7,7 @@ public interface AiTool {
 
     String description();
 
-    Map<String, Object> openAiJsonSchema();
+    Map<String, Object> parametersSchema();
 
     ToolResult execute(Map<String, Object> args) throws Exception;
 }

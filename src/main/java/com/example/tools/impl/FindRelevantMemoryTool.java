@@ -1,5 +1,6 @@
 package com.example.tools.impl;
 
+import com.example.ai.tools.AiToolComponent;
 import com.example.service.ConversationMemoryService;
 import com.example.tools.AiTool;
 import com.example.tools.ToolResult;
@@ -12,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-@Component
+@AiToolComponent
 @RequiredArgsConstructor
 @Slf4j
 public class FindRelevantMemoryTool implements AiTool {
@@ -36,7 +37,7 @@ public class FindRelevantMemoryTool implements AiTool {
     }
 
     @Override
-    public Map<String, Object> openAiJsonSchema() {
+    public Map<String, Object> parametersSchema() {
         return Map.of(
                 "type", "object",
                 "properties", Map.of(

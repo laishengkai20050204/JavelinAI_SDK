@@ -18,33 +18,21 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.function.FunctionCallback;
 import org.springframework.ai.model.function.FunctionCallingOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Entry point translating the legacy OpenAI-compatible payload contract into Spring AI calls.
- *
- * <p>The gateway accepts the existing request body ({@code model}, {@code messages}, optional
- * {@code tools}) and returns JSON matching the original OpenAI Chat Completions schema so that
- * {@link com.example.service.impl.AiServiceImpl} can stay mostly untouched.</p>
- */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -123,124 +111,178 @@ public class SpringAiChatGateway {
     }
 
     private FunctionCallingOptions buildOptions(Map<String, Object> payload, AiProperties.Mode mode) {
-        FunctionCallingOptions.Builder builder = FunctionCallingOptions.builder();
+        OptionsBuilder builder = mode == AiProperties.Mode.OPENAI
+                ? new OpenAiOptionsBuilder(OpenAiChatOptions.builder())
+                : new GenericOptionsBuilder(FunctionCallingOptions.builder());
 
         Object model = payload.getOrDefault("model", properties.getModel());
-        if (model != null) {
-            builder.model(model.toString());
-        }
+        if (model != null) builder.model(model.toString());
 
         Object temperature = payload.get("temperature");
         if (temperature instanceof Number number) {
             builder.temperature(number.doubleValue());
         } else if (temperature instanceof String str && StringUtils.hasText(str)) {
-            try {
-                builder.temperature(Double.parseDouble(str));
-            } catch (NumberFormatException ignored) {
-                // leave default
-            }
+            try { builder.temperature(Double.parseDouble(str)); } catch (NumberFormatException ignored) {}
         }
 
-        String toolChoice = resolveToolChoice(payload.get("tool_choice"));
-        Set<String> requestedTools = resolveToolNames(payload.get("tools"));
+        Object rawToolChoice = payload.containsKey("toolChoice")
+                ? payload.get("toolChoice")
+                : payload.get("tool_choice");
+        String normalizedToolChoice = normalizeToolChoice(rawToolChoice);
+        String forcedFunction = forcedFunctionName(rawToolChoice);
 
-        List<FunctionCallback> selectedCallbacks;
-        if (requestedTools.isEmpty()) {
-            selectedCallbacks = Collections.emptyList();
+        List<ToolDef> toolDefs = parseAllToolDefs(payload);
+        Set<String> allowed = buildAllowedFunctions(toolDefs, forcedFunction, normalizedToolChoice);
+
+        List<FunctionCallback> serverCallbacks = toolAdapter.functionCallbacks().stream()
+                .filter(cb -> allowed.contains(cb.getName()))
+                .toList();
+        List<FunctionCallback> clientDefCallbacks = buildCallbacks(toolDefs, allowed, serverCallbacks);
+
+        boolean hasClientTools = !clientDefCallbacks.isEmpty();
+
+        if (hasClientTools) {
+            builder.proxyToolCalls(Boolean.TRUE);   // 外部化（v2 用）
         } else {
-            selectedCallbacks = toolAdapter.functionCallbacks().stream()
-                    .filter(cb -> requestedTools.contains(cb.getName()))
-                    .toList();
+            builder.proxyToolCalls(Boolean.FALSE);  // 内部执行（/ai/decide 用）
         }
 
-        if ("none".equals(toolChoice) || selectedCallbacks.isEmpty()) {
-            builder.functionCallbacks(Collections.emptyList());
-            builder.functions(Collections.emptySet());
-        } else if ("required".equals(toolChoice) && !selectedCallbacks.isEmpty()) {
-            builder.functionCallbacks(selectedCallbacks);
-            builder.functions(selectedCallbacks.stream()
-                    .map(FunctionCallback::getName)
-                    .collect(Collectors.toSet()));
-        } else {
-            builder.functionCallbacks(selectedCallbacks);
-            builder.functions(selectedCallbacks.stream()
-                    .map(FunctionCallback::getName)
-                    .collect(Collectors.toSet()));
+        List<FunctionCallback> allCallbacks = new ArrayList<>(serverCallbacks.size() + clientDefCallbacks.size());
+        allCallbacks.addAll(serverCallbacks);
+        allCallbacks.addAll(clientDefCallbacks);
+
+        builder.functionCallbacks(allCallbacks);
+        builder.functions(allowed);
+
+        if (!allowed.isEmpty()) {
+            // ✅ 稳定起见，禁用并行工具
+            builder.parallelToolCalls(Boolean.FALSE);
         }
 
-        builder.proxyToolCalls(Boolean.FALSE);
+        if (rawToolChoice != null) builder.toolChoice(rawToolChoice);
 
         Map<String, Object> toolContext = new HashMap<>();
         Object scopeUser = payload.get("userId");
         Object scopeConversation = payload.get("conversationId");
-        if (scopeUser != null) {
-            toolContext.put("userId", scopeUser);
-        }
-        if (scopeConversation != null) {
-            toolContext.put("conversationId", scopeConversation);
-        }
-        if (!toolContext.isEmpty()) {
-            builder.toolContext(toolContext);
-        }
+        if (scopeUser != null) toolContext.put("userId", scopeUser);
+        if (scopeConversation != null) toolContext.put("conversationId", scopeConversation);
+        if (!toolContext.isEmpty()) builder.toolContext(toolContext);
+
+        log.debug("[TOOLS-ALLOWED] {}", allowed);
+        log.debug("[CB-REGISTERED] server={}, client-def={}",
+                serverCallbacks.stream().map(FunctionCallback::getName).toList(),
+                clientDefCallbacks.stream().map(FunctionCallback::getName).toList());
+        log.debug("[TOOL-CHOICE] {}", rawToolChoice);
 
         return builder.build();
     }
 
-    private String resolveToolChoice(Object toolChoice) {
-        if (toolChoice == null) {
-            return "auto";
+    private Set<String> buildAllowedFunctions(List<ToolDef> defs,
+                                              @Nullable String forcedFunction,
+                                              String normalizedToolChoice) {
+        if ("none".equals(normalizedToolChoice)) return Collections.emptySet();
+        if (forcedFunction != null && StringUtils.hasText(forcedFunction)) {
+            LinkedHashSet<String> forced = new LinkedHashSet<>();
+            forced.add(forcedFunction);
+            return forced;
         }
-        if (toolChoice instanceof String str) {
-            return str.trim().toLowerCase(Locale.ROOT);
+        LinkedHashSet<String> allowed = new LinkedHashSet<>();
+        for (ToolDef def : defs) {
+            if (StringUtils.hasText(def.name())) allowed.add(def.name());
         }
+        if (allowed.isEmpty() && !"none".equals(normalizedToolChoice)) {
+            Set<String> serverAll = toolAdapter.functionCallbacks().stream()
+                    .map(FunctionCallback::getName)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            allowed.addAll(serverAll);
+        }
+        return allowed;
+    }
+
+    private List<ToolDef> parseAllToolDefs(Map<String, Object> payload) {
+        Map<String, ToolDef> merged = new LinkedHashMap<>();
+        collectToolDefs(payload.get("tools"), merged);
+        collectToolDefs(payload.get("clientTools"), merged);
+        return new ArrayList<>(merged.values());
+    }
+
+    private void collectToolDefs(Object toolsObj, Map<String, ToolDef> merged) {
+        if (!(toolsObj instanceof List<?> list)) return;
+        for (Object item : list) {
+            Map<String, Object> tool = castToMap(item);
+            if (tool == null) continue;
+            Map<String, Object> function = castToMap(tool.get("function"));
+            if (function == null) continue;
+            String name = asString(function.get("name"));
+            if (!StringUtils.hasText(name)) continue;
+            Object descriptionObj = function.containsKey("description") ? function.get("description") : tool.get("description");
+            String description = descriptionObj != null ? descriptionObj.toString() : "";
+            JsonNode schema = mapper.valueToTree(function.get("parameters"));
+            String execTarget = resolveExecTarget(function.get("x-execTarget"), tool.get("x-execTarget"));
+            merged.put(name, new ToolDef(name, description, schema, execTarget));
+        }
+    }
+
+    private String resolveExecTarget(Object functionLevel, Object toolLevel) {
+        String functionTarget = normalizeExecTarget(asString(functionLevel));
+        if (functionTarget != null) return functionTarget;
+        String toolTarget = normalizeExecTarget(asString(toolLevel));
+        if (toolTarget != null) return toolTarget;
+        return "server";
+    }
+
+    private String normalizeExecTarget(String raw) {
+        if (!StringUtils.hasText(raw)) return null;
+        return raw.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private @Nullable String forcedFunctionName(Object toolChoice) {
         if (toolChoice instanceof Map<?, ?> map) {
             Object type = map.get("type");
-            if (type instanceof String str) {
-                return str.trim().toLowerCase(Locale.ROOT);
+            if (type instanceof String str && "function".equalsIgnoreCase(str.trim())) {
+                Map<String, Object> function = castToMap(map.get("function"));
+                if (function != null) {
+                    String name = asString(function.get("name"));
+                    return StringUtils.hasText(name) ? name : null;
+                }
             }
+        }
+        return null;
+    }
+
+    private List<FunctionCallback> buildCallbacks(List<ToolDef> defs,
+                                                  Set<String> allowed,
+                                                  List<FunctionCallback> serverCallbacks) {
+        if (allowed.isEmpty() || defs.isEmpty()) return Collections.emptyList();
+        Set<String> serverNames = serverCallbacks.stream().map(FunctionCallback::getName).collect(Collectors.toSet());
+        List<FunctionCallback> placeholders = new ArrayList<>();
+        for (ToolDef def : defs) {
+            if (!allowed.contains(def.name())) continue;
+            if (!"client".equalsIgnoreCase(def.execTarget())) continue;
+            if (serverNames.contains(def.name())) continue;
+            placeholders.add(new FrontendDefinitionCallback(def));
+        }
+        return placeholders;
+    }
+
+    private String normalizeToolChoice(Object toolChoice) {
+        if (toolChoice instanceof String str && StringUtils.hasText(str)) {
+            return str.trim().toLowerCase(Locale.ROOT);
         }
         return "auto";
     }
 
-    private Set<String> resolveToolNames(Object toolsObj) {
-        if (toolsObj == null) {
-            return Collections.emptySet();
-        }
-        Set<String> names = new HashSet<>();
-        if (toolsObj instanceof List<?> list) {
-            for (Object item : list) {
-                if (item instanceof Map<?, ?> map) {
-                    Map<String, Object> function = castToMap(map.get("function"));
-                    String name = function != null ? asString(function.get("name")) : null;
-                    if (StringUtils.hasText(name)) {
-                        names.add(name);
-                    }
-                }
-            }
-        }
-        return names;
-    }
-
     private Message mapToMessage(Map<String, Object> source) {
-        if (source == null) {
-            return null;
-        }
+        if (source == null) return null;
         String role = asString(source.get("role"));
         Object content = source.get("content");
-
-        if ("system".equalsIgnoreCase(role)) {
-            return new SystemMessage(normalizeContent(content));
-        }
-        if ("user".equalsIgnoreCase(role)) {
-            return new UserMessage(normalizeContent(content));
-        }
+        if ("system".equalsIgnoreCase(role)) return new SystemMessage(normalizeContent(content));
+        if ("user".equalsIgnoreCase(role)) return new UserMessage(normalizeContent(content));
         if ("assistant".equalsIgnoreCase(role)) {
             String text = normalizeContent(content);
             List<AssistantMessage.ToolCall> toolCalls = extractToolCalls(source.get("tool_calls"));
             Map<String, Object> metadata = castToMap(source.get("metadata"));
-            if (metadata == null) {
-                metadata = new HashMap<>();
-            }
+            if (metadata == null) metadata = new HashMap<>();
             return new AssistantMessage(text, metadata, toolCalls);
         }
         if ("tool".equalsIgnoreCase(role)) {
@@ -254,15 +296,11 @@ public class SpringAiChatGateway {
             );
             return new ToolResponseMessage(List.of(response));
         }
-
-        // fallback to user message for unknown roles
         return new UserMessage(normalizeContent(content));
     }
 
     private List<AssistantMessage.ToolCall> extractToolCalls(Object toolCallsObj) {
-        if (toolCallsObj == null) {
-            return Collections.emptyList();
-        }
+        if (toolCallsObj == null) return Collections.emptyList();
         if (toolCallsObj instanceof List<?> list) {
             List<AssistantMessage.ToolCall> calls = new ArrayList<>();
             for (Object entry : list) {
@@ -334,9 +372,7 @@ public class SpringAiChatGateway {
 
         if (message != null) {
             String content = message.getContent();
-            if (StringUtils.hasText(content)) {
-                delta.put("content", content);
-            }
+            if (StringUtils.hasText(content)) delta.put("content", content);
             if (message.hasToolCalls()) {
                 ArrayNode toolCalls = delta.putArray("tool_calls");
                 for (AssistantMessage.ToolCall call : message.getToolCalls()) {
@@ -354,29 +390,17 @@ public class SpringAiChatGateway {
     }
 
     private String normalizeContent(Object content) {
-        if (content == null) {
-            return "";
-        }
-        if (content instanceof String str) {
-            return str;
-        }
+        if (content == null) return "";
+        if (content instanceof String str) return str;
         if (content instanceof List<?> list) {
             StringBuilder builder = new StringBuilder();
             for (Object item : list) {
                 if (item instanceof Map<?, ?> map) {
                     Object text = map.get("text");
-                    if (text == null) {
-                        text = map.get("content");
-                    }
-                    if (text == null) {
-                        text = map.get("value");
-                    }
-                    if (text != null) {
-                        builder.append(text);
-                    }
-                } else if (item != null) {
-                    builder.append(item);
-                }
+                    if (text == null) text = map.get("content");
+                    if (text == null) text = map.get("value");
+                    if (text != null) builder.append(text);
+                } else if (item != null) builder.append(item);
             }
             return builder.toString();
         }
@@ -388,9 +412,7 @@ public class SpringAiChatGateway {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> castToMap(Object value) {
-        if (value == null) {
-            return null;
-        }
+        if (value == null) return null;
         if (value instanceof Map<?, ?> raw) {
             Map<String, Object> result = new HashMap<>();
             raw.forEach((key, val) -> result.put(key == null ? null : key.toString(), val));
@@ -404,5 +426,64 @@ public class SpringAiChatGateway {
 
     private String asString(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    private record ToolDef(String name, String desc, JsonNode schema, String execTarget) {}
+
+    private interface OptionsBuilder {
+        void model(String model);
+        void temperature(Double temperature);
+        void functionCallbacks(List<FunctionCallback> callbacks);
+        void functions(Set<String> names);
+        void proxyToolCalls(Boolean proxy);
+        void toolContext(Map<String, Object> context);
+        void toolChoice(Object toolChoice);
+        void parallelToolCalls(Boolean parallel);
+        FunctionCallingOptions build();
+    }
+
+    private static final class GenericOptionsBuilder implements OptionsBuilder {
+        private final FunctionCallingOptions.Builder delegate;
+        private GenericOptionsBuilder(FunctionCallingOptions.Builder delegate) { this.delegate = delegate; }
+        @Override public void model(String model) { delegate.model(model); }
+        @Override public void temperature(Double temperature) { delegate.temperature(temperature); }
+        @Override public void functionCallbacks(List<FunctionCallback> callbacks) { delegate.functionCallbacks(callbacks); }
+        @Override public void functions(Set<String> names) { delegate.functions(names); }
+        @Override public void proxyToolCalls(Boolean proxy) { delegate.proxyToolCalls(proxy); }
+        @Override public void toolContext(Map<String, Object> context) { delegate.toolContext(context); }
+        @Override public void toolChoice(Object toolChoice) { /* not supported */ }
+        @Override public void parallelToolCalls(Boolean parallel) { /* not supported */ }
+        @Override public FunctionCallingOptions build() { return delegate.build(); }
+    }
+
+    private static final class OpenAiOptionsBuilder implements OptionsBuilder {
+        private final OpenAiChatOptions.Builder delegate;
+        private OpenAiOptionsBuilder(OpenAiChatOptions.Builder delegate) { this.delegate = delegate; }
+        @Override public void model(String model) { delegate.model(model); }
+        @Override public void temperature(Double temperature) { delegate.temperature(temperature); }
+        @Override public void functionCallbacks(List<FunctionCallback> callbacks) { delegate.functionCallbacks(callbacks); }
+        @Override public void functions(Set<String> names) { delegate.functions(names); }
+        @Override public void proxyToolCalls(Boolean proxy) { delegate.proxyToolCalls(proxy); }
+        @Override public void toolContext(Map<String, Object> context) { delegate.toolContext(context); }
+        @Override public void toolChoice(Object toolChoice) {
+            if (toolChoice == null) return;
+            if (toolChoice instanceof String str) delegate.toolChoice(str);
+            else delegate.toolChoice(toolChoice);
+        }
+        @Override public void parallelToolCalls(Boolean parallel) { delegate.parallelToolCalls(parallel); }
+        @Override public FunctionCallingOptions build() { return delegate.build(); }
+    }
+
+    private class FrontendDefinitionCallback implements FunctionCallback {
+        private final ToolDef toolDef;
+        private final String schema;
+        private FrontendDefinitionCallback(ToolDef toolDef) {
+            this.toolDef = toolDef; this.schema = toolDef.schema() != null ? toolDef.schema().toString() : "{}";
+        }
+        @Override public String getName() { return toolDef.name(); }
+        @Override public String getDescription() { return toolDef.desc() != null ? toolDef.desc() : ""; }
+        @Override public String getInputTypeSchema() { return schema; }
+        @Override public String call(String argumentsJson) { throw new UnsupportedOperationException("frontend tool: " + toolDef.name()); }
+        @Override public String call(String argumentsJson, ToolContext context) { throw new UnsupportedOperationException("frontend tool: " + toolDef.name()); }
     }
 }
