@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.service.impl.mapper.ToolExecutionMapper">
+
+    <resultMap id="ToolExecMap" type="com.example.service.impl.mapper.model.ToolExecutionRecord">
+        <id     column="id"            property="id"/>
+        <result column="user_id"       property="userId"/>
+        <result column="conversation_id" property="conversationId"/>
+        <result column="tool_name"     property="toolName"/>
+        <result column="args_hash"     property="argsHash"/>
+        <result column="status"        property="status"/>
+        <result column="args_json"     property="argsJson"/>
+        <result column="result_json"   property="resultJson"/>
+        <result column="created_at"    property="createdAt"/>
+        <result column="updated_at"    property="updatedAt"/>
+        <result column="expires_at"    property="expiresAt"/>
+    </resultMap>
+
+    <select id="findValidSuccess" resultMap="ToolExecMap">
+        SELECT *
+        FROM tool_executions
+        WHERE user_id = #{userId}
+        AND conversation_id = #{conversationId}
+        AND tool_name = #{toolName}
+        AND args_hash = #{argsHash}
+        AND status = 'SUCCESS'
+        AND (expires_at IS NULL OR expires_at > NOW())
+        ORDER BY created_at DESC
+        LIMIT 1
+    </select>
+
+    <insert id="upsertSuccess">
+        INSERT INTO tool_executions
+        (user_id, conversation_id, tool_name, args_hash, status, args_json, result_json, expires_at)
+        VALUES
+        (#{rec.userId}, #{rec.conversationId}, #{rec.toolName}, #{rec.argsHash}, 'SUCCESS',
+        #{rec.argsJson}, #{rec.resultJson}, #{rec.expiresAt})
+        ON DUPLICATE KEY UPDATE
+        result_json = VALUES(result_json),
+        expires_at  = VALUES(expires_at),
+        updated_at  = CURRENT_TIMESTAMP
+    </insert>
+
+</mapper>

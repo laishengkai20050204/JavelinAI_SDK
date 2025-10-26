@@ -1,0 +1,134 @@
+[
+  {
+    "userId": "1",
+    "conversationId": "demo-001",
+    "q": "你好！先自我介绍一下。",
+    "toolChoice": "none",
+    "responseMode": "step-json-ndjson",
+    "clientResults": [],
+    "clientTools": []
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-002",
+    "q": "帮我打开 https://www.baidu.com，并告诉我首页标题。",
+    "toolChoice": "auto",
+    "responseMode": "decision",
+    "clientResults": [],
+    "clientTools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "open_url",
+          "description": "Open a URL in the user's browser and return page metadata.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ]
+          },
+          "execTarget": "CLIENT"
+        }
+      }
+    ]
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-002",
+    "q": "",
+    "toolChoice": "auto",
+    "responseMode": "decision",
+    "clientResults": [
+      {
+        "tool_call_id": "call_abc123",
+        "name": "open_url",
+        "content": "{\"status\":\"ok\",\"title\":\"百度一下，你就知道\",\"url\":\"https://www.baidu.com\"}"
+      }
+    ],
+    "clientTools": []
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-003",
+    "q": "调用 hello_ai，给我一声问候。",
+    "toolChoice": "hello_ai",
+    "responseMode": "decision",
+    "clientResults": [],
+    "clientTools": []
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-002",
+    "q": "基于刚才的网页标题，给我一句中文总结。",
+    "toolChoice": "none",
+    "responseMode": "final",
+    "clientResults": [],
+    "clientTools": []
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-004",
+    "q": "把这个链接打开并把标题通过系统通知告诉我：https://www.example.com",
+    "toolChoice": "auto",
+    "responseMode": "decision",
+    "clientResults": [],
+    "clientTools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "open_url",
+          "description": "Open a URL and return page title.",
+          "parameters": {
+            "type": "object",
+            "properties": { "url": { "type": "string" } },
+            "required": ["url"]
+          },
+          "execTarget": "CLIENT"
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "notify_user",
+          "description": "Show a local notification to the user.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "message": { "type": "string" }
+            },
+            "required": ["title", "message"]
+          },
+          "execTarget": "CLIENT"
+        }
+      }
+    ]
+  },
+  {
+    "userId": "1",
+    "conversationId": "demo-004",
+    "q": "",
+    "toolChoice": "auto",
+    "responseMode": "decision",
+    "clientResults": [
+      {
+        "tool_call_id": "call_open",
+        "name": "open_url",
+        "content": "{\"status\":\"ok\",\"title\":\"Example Domain\",\"url\":\"https://www.example.com\"}"
+      },
+      {
+        "tool_call_id": "call_notify",
+        "name": "notify_user",
+        "content": "{\"status\":\"ok\"}"
+      }
+    ],
+    "clientTools": []
+  }
+]
+
+
