@@ -2,6 +2,7 @@ package com.example.service.impl;
 
 import com.example.ai.SpringAiChatGateway;
 import com.example.config.AiProperties;
+import com.example.controller.ChatController;
 import com.example.service.AiService;
 import com.example.service.ConversationMemoryService;
 import com.example.service.impl.dto.ExecTarget;
@@ -1792,6 +1793,18 @@ public class AiServiceImpl implements AiService {
         }
 
         state.appendClientResults();
+        // === add begin: log clientResults received & attached ===
+        if (state.hasClientResults) {
+            log.info("[V2] received clientResults: count={}, ids={}",
+                    state.clientResults.size(),
+                    state.clientResults.stream().map(ToolResultDTO::getTool_call_id).toList());
+            for (var r : state.clientResults) {
+                String s = r.getContent() == null ? "" : r.getContent();
+                log.debug("[V2] clientResult id={} name={} len={} preview={}",
+                        r.getTool_call_id(), r.getName(), s.length(), clip(s, 500));
+            }
+        }
+        // === add end ===
 
         if (!state.hasUserPrompt && !state.hasClientResults) {
             String message = "Either q or clientResults must be provided";
@@ -1952,6 +1965,7 @@ public class AiServiceImpl implements AiService {
 
                 if (!clientCalls.isEmpty()) {
                     state.pendingClientCalls.addAll(clientCalls);
+
                     sink.next(toNdjson(NdjsonEvent.builder()
                             .event("pendingClientCalls")
                             .ts(now())
@@ -2006,6 +2020,17 @@ public class AiServiceImpl implements AiService {
                         // 客户端工具：并行下发给前端，不阻塞服务端回路
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
+                            // === add begin: log pending client calls ===
+                            log.info("[V2] pendingClientCalls: count={}, ids={}",
+                                    split.client().size(),
+                                    split.client().stream().map(ToolCallDTO::getId).toList());
+                            for (var c : split.client()) {
+                                String argsJson = safeArgsJson(c.getArguments(), c.getName(), c.getId()); // 你已有方法
+                                log.debug("[V2] pendingCall id={} name={} execTarget={} argsPreview={}",
+                                        c.getId(), c.getName(), c.getExecTarget(), clip(argsJson, 400));
+                            }
+                            // === add end ===
+
                             sink.next(toNdjson(NdjsonEvent.builder()
                                     .event("pendingClientCalls")
                                     .ts(now())
@@ -2114,6 +2139,17 @@ public class AiServiceImpl implements AiService {
 
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
+                            // === add begin: log pending client calls ===
+                            log.info("[V2] pendingClientCalls: count={}, ids={}",
+                                    split.client().size(),
+                                    split.client().stream().map(ToolCallDTO::getId).toList());
+                            for (var c : split.client()) {
+                                String argsJson = safeArgsJson(c.getArguments(), c.getName(), c.getId()); // 你已有方法
+                                log.debug("[V2] pendingCall id={} name={} execTarget={} argsPreview={}",
+                                        c.getId(), c.getName(), c.getExecTarget(), clip(argsJson, 400));
+                            }
+                            // === add end ===
+
                             sink.next(toNdjson(NdjsonEvent.builder()
                                     .event("pendingClientCalls")
                                     .ts(now())
@@ -2429,6 +2465,17 @@ public class AiServiceImpl implements AiService {
                 .finalAnswer(state.finalAnswer)
                 .error(state.error)
                 .build();
+
+        // === add begin: log step snapshot ===
+        log.info("[V2] EMIT step: finished={} remainingLoops={} serverResults={} pendingClientCalls={} finalAnswer.len={} error={}",
+                state.finished,
+                state.remainingLoops,
+                state.serverResults == null ? 0 : state.serverResults.size(),
+                state.pendingClientCalls == null ? 0 : state.pendingClientCalls.size(),
+                state.finalAnswer == null ? 0 : state.finalAnswer.length(),
+                state.error);
+        // === add end ===
+
         sink.next(toNdjson(NdjsonEvent.builder()
                 .event("step")
                 .ts(now())
@@ -2749,6 +2796,11 @@ public class AiServiceImpl implements AiService {
         if (map == null || !map.containsKey(key)) return defVal;
         Object v = map.get(key);
         return (v instanceof Boolean) ? (Boolean) v : Boolean.parseBoolean(String.valueOf(v));
+    }
+
+    private static String clip(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "…(" + s.length() + ")";
     }
 
 

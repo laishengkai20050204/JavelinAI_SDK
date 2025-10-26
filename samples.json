@@ -1,134 +1,202 @@
 [
   {
-    "userId": "1",
-    "conversationId": "demo-001",
-    "q": "你好！先自我介绍一下。",
-    "toolChoice": "none",
-    "responseMode": "step-json-ndjson",
-    "clientResults": [],
-    "clientTools": []
+    "userId": "u1",
+    "conversationId": "c1",
+    "q": "你好，今天适合写代码吗？",
+    "toolChoice": "auto",
+    "responseMode": "step-json-ndjson"
   },
   {
-    "userId": "1",
-    "conversationId": "demo-002",
-    "q": "帮我打开 https://www.baidu.com，并告诉我首页标题。",
+    "userId": "u1",
+    "conversationId": "c2",
+    "q": "帮我打开百度主页",
     "toolChoice": "auto",
-    "responseMode": "decision",
-    "clientResults": [],
+    "responseMode": "step-json-ndjson",
     "clientTools": [
       {
         "type": "function",
         "function": {
           "name": "open_url",
-          "description": "Open a URL in the user's browser and return page metadata.",
+          "description": "在浏览器中打开指定链接",
           "parameters": {
             "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ]
-          },
-          "execTarget": "CLIENT"
-        }
-      }
-    ]
-  },
-  {
-    "userId": "1",
-    "conversationId": "demo-002",
-    "q": "",
-    "toolChoice": "auto",
-    "responseMode": "decision",
-    "clientResults": [
-      {
-        "tool_call_id": "call_abc123",
-        "name": "open_url",
-        "content": "{\"status\":\"ok\",\"title\":\"百度一下，你就知道\",\"url\":\"https://www.baidu.com\"}"
-      }
-    ],
-    "clientTools": []
-  },
-  {
-    "userId": "1",
-    "conversationId": "demo-003",
-    "q": "调用 hello_ai，给我一声问候。",
-    "toolChoice": "hello_ai",
-    "responseMode": "step-json-ndjson",
-    "clientResults": [],
-    "clientTools": []
-  },
-  {
-    "userId": "1",
-    "conversationId": "demo-002",
-    "q": "基于刚才的网页标题，给我一句中文总结。",
-    "toolChoice": "none",
-    "responseMode": "step-json-ndjson",
-    "clientResults": [],
-    "clientTools": []
-  },
-  {
-    "userId": "1",
-    "conversationId": "demo-004",
-    "q": "把这个链接打开并把标题通过系统通知告诉我：https://www.example.com",
-    "toolChoice": "auto",
-    "responseMode": "step-json-ndjson",
-    "clientResults": [],
-    "clientTools": [
-      {
-        "type": "function",
-        "function": {
-          "name": "open_url",
-          "description": "Open a URL and return page title.",
-          "parameters": {
-            "type": "object",
-            "properties": { "url": { "type": "string" } },
+            "properties": { "url": { "type": "string", "format": "uri" } },
             "required": ["url"]
-          },
-          "execTarget": "CLIENT"
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "notify_user",
-          "description": "Show a local notification to the user.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "title": { "type": "string" },
-              "message": { "type": "string" }
-            },
-            "required": ["title", "message"]
-          },
-          "execTarget": "CLIENT"
-        }
+          }
+        },
+        "x-execTarget": "client"
       }
     ]
   },
   {
-    "userId": "1",
-    "conversationId": "demo-004",
-    "q": "",
+    "userId": "u1",
+    "conversationId": "c2",
+    "responseMode": "step-json-ndjson",
+    "clientResults": [
+      { "tool_call_id": "call_abc123", "name": "open_url", "content": "{\"ok\":true}" }
+    ],
+    "clientTools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "open_url",
+          "description": "在浏览器中打开指定链接",
+          "parameters": {
+            "type": "object",
+            "properties": { "url": { "type": "string", "format": "uri" } },
+            "required": ["url"]
+          }
+        },
+        "x-execTarget": "client"
+      }
+    ]
+  },
+  {
+    "userId": "u2",
+    "conversationId": "c3",
+    "q": "调用hello_ai",
     "toolChoice": "auto",
-    "responseMode": "decision",
+    "responseMode": "step-json-ndjson"
+  },
+  {
+    "userId": "u3",
+    "conversationId": "c4",
+    "q": "回顾下我之前提到的 Spring 链接，并顺便帮我打开",
+    "toolChoice": "auto",
+    "responseMode": "step-json-ndjson",
+    "clientTools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "open_url",
+          "description": "在浏览器中打开指定链接",
+          "parameters": {
+            "type": "object",
+            "properties": { "url": { "type": "string", "format": "uri" } },
+            "required": ["url"]
+          }
+        },
+        "x-execTarget": "client"
+      }
+    ]
+  },
+  {
+    "userId": "u3",
+    "conversationId": "c4",
+    "responseMode": "step-json-ndjson",
+    "clientResults": [
+      { "tool_call_id": "call_cli1", "name": "open_url", "content": "{\"ok\":true}" }
+    ]
+  },
+  {
+    "userId": "u4",
+    "conversationId": "c5",
+    "q": "测试错误",
+    "toolChoice": "auto",
+    "responseMode": "stream"
+  },
+  {
+    "userId": "u5",
+    "conversationId": "c6",
+    "q": "告诉我 LangChain 是什么，但不要调用任何工具",
+    "toolChoice": "none",
+    "responseMode": "step-json-ndjson",
+    "clientTools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "open_url",
+          "description": "在浏览器中打开指定链接",
+          "parameters": {
+            "type": "object",
+            "properties": { "url": { "type": "string", "format": "uri" } },
+            "required": ["url"]
+          }
+        },
+        "x-execTarget": "client"
+      }
+    ]
+  },
+
+  {
+    "event": "pendingClientCalls",
+    "ts": "2025-10-26T07:58:00Z",
+    "data": {
+      "calls": [
+        {
+          "id": "call_cli_open_1",
+          "name": "open_url",
+          "arguments": { "url": "https://www.baidu.com" },
+          "execTarget": "CLIENT"
+        }
+      ]
+    }
+  },
+  {
+    "userId": "u1",
+    "conversationId": "c_open",
+    "responseMode": "step-json-ndjson",
     "clientResults": [
       {
-        "tool_call_id": "call_open",
+        "tool_call_id": "call_cli_open_1",
         "name": "open_url",
-        "content": "{\"status\":\"ok\",\"title\":\"Example Domain\",\"url\":\"https://www.example.com\"}"
-      },
-      {
-        "tool_call_id": "call_notify",
-        "name": "notify_user",
-        "content": "{\"status\":\"ok\"}"
+        "content": "{\"ok\":true,\"httpStatus\":200,\"title\":\"百度一下，你就知道\",\"openedAt\":\"2025-10-26T07:58:02Z\"}"
       }
-    ],
-    "clientTools": []
+    ]
+  },
+
+  {
+    "event": "pendingClientCalls",
+    "ts": "2025-10-26T08:00:00Z",
+    "data": {
+      "calls": [
+        {
+          "id": "call_cli_read_1",
+          "name": "read_file",
+          "arguments": { "path": "C:/temp/readme.txt", "encoding": "utf-8", "maxBytes": 4096 },
+          "execTarget": "CLIENT"
+        }
+      ]
+    }
+  },
+  {
+    "userId": "u1",
+    "conversationId": "c_read",
+    "responseMode": "step-json-ndjson",
+    "clientResults": [
+      {
+        "tool_call_id": "call_cli_read_1",
+        "name": "read_file",
+        "content": "{\"ok\":true,\"path\":\"C:/temp/readme.txt\",\"size\":1024,\"encoding\":\"utf-8\",\"preview\":\"# 项目说明\\n这是一个示例文件……\",\"sha256\":\"f2a1df7b9f3c2c4c8de2048ad0e8d8b7e0fa2d2c2b7d0f2a1b9c4e3d1a2b3c4d\"}"
+      }
+    ]
+  },
+
+  {
+    "event": "pendingClientCalls",
+    "ts": "2025-10-26T08:02:00Z",
+    "data": {
+      "calls": [
+        {
+          "id": "call_cli_sel_1",
+          "name": "select_text",
+          "arguments": { "windowId": "main", "selector": "#editor", "range": { "from": 120, "to": 240 } },
+          "execTarget": "CLIENT"
+        }
+      ]
+    }
+  },
+  {
+    "userId": "u1",
+    "conversationId": "c_select",
+    "responseMode": "step-json-ndjson",
+    "clientResults": [
+      {
+        "tool_call_id": "call_cli_sel_1",
+        "name": "select_text",
+        "content": "{\"ok\":true,\"windowId\":\"main\",\"selector\":\"#editor\",\"range\":{\"from\":120,\"to\":240},\"text\":\"这是用户在编辑器里选中的文本片段……\",\"screenRect\":{\"x\":320,\"y\":180,\"width\":640,\"height\":90}}"
+      }
+    ]
   }
+
 ]
-
-

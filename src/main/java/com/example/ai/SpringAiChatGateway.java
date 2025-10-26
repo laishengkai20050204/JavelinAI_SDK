@@ -141,11 +141,13 @@ public class SpringAiChatGateway {
 
         boolean hasClientTools = !clientDefCallbacks.isEmpty();
 
-        if (hasClientTools) {
-            builder.proxyToolCalls(Boolean.TRUE);   // 外部化（v2 用）
-        } else {
-            builder.proxyToolCalls(Boolean.FALSE);  // 内部执行（/ai/decide 用）
-        }
+//        if (hasClientTools) {
+//            builder.proxyToolCalls(Boolean.TRUE);   // 外部化（v2 用）
+//        } else {
+//            builder.proxyToolCalls(Boolean.FALSE);  // 内部执行（/ai/decide 用）
+//        }
+        // 始终外部化 tool-calls：模型只“提出调用”，真正执行由你的编排完成
+        builder.proxyToolCalls(Boolean.TRUE);
 
         List<FunctionCallback> allCallbacks = new ArrayList<>(serverCallbacks.size() + clientDefCallbacks.size());
         allCallbacks.addAll(serverCallbacks);

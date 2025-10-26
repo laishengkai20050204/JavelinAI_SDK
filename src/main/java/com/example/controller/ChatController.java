@@ -200,6 +200,25 @@ public class ChatController {
     @Operation(summary = "v2 Orchestration (step-json, NDJSON heartbeat)",
             description = "服务端仅执行SERVER工具；CLIENT调用返回给前端执行；全程 NDJSON 心跳与阶段事件。")
     public Flux<String> orchestratedStepNdjson(@RequestBody V2StepNdjsonRequest payload) {
+
+        // === add begin: request overview for NDJSON step ===
+        log.info("[step-ndjson] req userId={} convId={} hasQ={} clientResults={} clientTools={} toolChoice={}",
+                payload.getUserId(),
+                payload.getConversationId(),
+                payload.getQ() != null && !payload.getQ().isBlank(),
+                payload.getClientResults() == null ? 0 : payload.getClientResults().size(),
+                payload.getClientTools() == null ? 0 : payload.getClientTools().size(),
+                payload.getToolChoice());
+
+        if (payload.getClientResults() != null) {
+            for (var r : payload.getClientResults()) {
+                String s = r.getContent() == null ? "" : r.getContent();
+                log.debug("[step-ndjson] clientResult id={} name={} len={} preview={}",
+                        r.getTool_call_id(), r.getName(), s.length(), clip(s, 300));
+            }
+        }
+        // === add end ===
+
         if (payload == null || payload.getResponseMode() == null
                 || !"step-json-ndjson".equalsIgnoreCase(payload.getResponseMode())) {
             return Flux.just(toNdjson(NdjsonEvent.builder()
@@ -210,6 +229,13 @@ public class ChatController {
         }
         return aiService.orchestrateStepNdjson(payload);
     }
+
+    // 简单截断，避免日志爆表
+    private static String clip(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "…(" + s.length() + ")";
+    }
+
 
     private String toNdjson(Object payload) {
         try {
