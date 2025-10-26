@@ -22,4 +22,8 @@ public interface ConversationMemoryService {
     void promoteDraftsToFinal(String userId, String conversationId, String stepId);
 
     void deleteDraftsOlderThanHours(int hours);
+
+    String findStepIdByToolCallId(String userId, String conversationId, String toolCallId);
+
+    Integer findMaxSeq(String userId, String conversationId, String stepId);
 }

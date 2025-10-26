@@ -341,4 +341,34 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         return null;
     }
 
+    @Override
+    public String findStepIdByToolCallId(String userId, String conversationId, String toolCallId) {
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId) || !StringUtils.hasText(toolCallId)) {
+            return null;
+        }
+        try {
+            return mapper.selectStepIdByToolCallId(userId, conversationId, toolCallId);
+        } catch (Exception e) {
+            log.warn("findStepIdByToolCallId failed userId={} conversationId={} toolCallId={}",
+                    userId, conversationId, toolCallId, e);
+            return null;
+        }
+    }
+
+    @Override
+    public Integer findMaxSeq(String userId, String conversationId, String stepId) {
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId) || !StringUtils.hasText(stepId)) {
+            return 0;
+        }
+        try {
+            Integer v = mapper.selectMaxSeq(userId, conversationId, stepId);
+            return v == null ? 0 : v;
+        } catch (Exception e) {
+            log.warn("findMaxSeq failed userId={} conversationId={} stepId={}",
+                    userId, conversationId, stepId, e);
+            return 0;
+        }
+    }
+
+
 }

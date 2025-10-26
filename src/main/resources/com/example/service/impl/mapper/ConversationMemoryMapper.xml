@@ -95,4 +95,27 @@
           AND created_at &lt; DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
     </delete>
 
+    <select id="selectStepIdByToolCallId" resultType="string">
+        SELECT step_id
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND role = 'assistant'
+          AND state IN ('DRAFT','FINAL')
+          AND payload IS NOT NULL
+          AND payload LIKE CONCAT('%"tool_calls"%')
+          AND payload LIKE CONCAT('%"id":"', #{toolCallId}, '"%')
+        ORDER BY created_at DESC
+        LIMIT 1
+    </select>
+
+    <!-- 取某 stepId 的最大 seq，用于多轮在同一 step 里顺延序号 -->
+    <select id="selectMaxSeq" resultType="int">
+        SELECT COALESCE(MAX(seq), 0)
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND step_id = #{stepId}
+    </select>
+
 </mapper>

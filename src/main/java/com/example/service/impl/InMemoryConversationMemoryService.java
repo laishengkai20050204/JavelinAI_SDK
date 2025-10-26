@@ -351,4 +351,50 @@ public class InMemoryConversationMemoryService implements ConversationMemoryServ
             return copy;
         }
     }
+
+    @Override
+    public String findStepIdByToolCallId(String userId, String conversationId, String toolCallId) {
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId) || !StringUtils.hasText(toolCallId)) {
+            return null;
+        }
+        Map<MessageKey, StoredMessage> bucket = getConversation(userId).get(conversationId);
+        if (bucket == null || bucket.isEmpty()) {
+            return null;
+        }
+
+        StoredMessage latest = null;
+        for (StoredMessage sm : bucket.values()) {
+            // 只看 assistant 且 payload 中含有 tool_calls 且包含该 id
+            if (!"assistant".equals(sm.role)) continue;
+            if (!StringUtils.hasText(sm.payload)) continue;
+            if (!sm.payload.contains("\"tool_calls\"")) continue;
+            if (!sm.payload.contains("\"id\":\"" + toolCallId + "\"")) continue;
+
+            if (latest == null
+                    || sm.createdAt.isAfter(latest.createdAt)
+                    || (sm.createdAt.equals(latest.createdAt) && sm.seq > latest.seq)) {
+                latest = sm;
+            }
+        }
+        return latest != null ? latest.stepId : null;
+    }
+
+    @Override
+    public Integer findMaxSeq(String userId, String conversationId, String stepId) {
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId) || !StringUtils.hasText(stepId)) {
+            return 0;
+        }
+        Map<MessageKey, StoredMessage> bucket = getConversation(userId).get(conversationId);
+        if (bucket == null || bucket.isEmpty()) {
+            return 0;
+        }
+        int max = 0;
+        for (StoredMessage sm : bucket.values()) {
+            if (stepId.equals(sm.stepId) && sm.seq > max) {
+                max = sm.seq;
+            }
+        }
+        return max;
+    }
+
 }

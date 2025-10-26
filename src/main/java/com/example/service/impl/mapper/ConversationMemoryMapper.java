@@ -44,4 +44,13 @@ public interface ConversationMemoryMapper {
                              @Param("stepId") String stepId);
 
     int deleteDraftsOlderThanHours(@Param("hours") int hours);
+
+
+    String selectStepIdByToolCallId(@Param("userId") String userId,
+                                    @Param("conversationId") String conversationId,
+                                    @Param("toolCallId") String toolCallId);
+
+    Integer selectMaxSeq(@Param("userId") String userId,
+                         @Param("conversationId") String conversationId,
+                         @Param("stepId") String stepId);
 }

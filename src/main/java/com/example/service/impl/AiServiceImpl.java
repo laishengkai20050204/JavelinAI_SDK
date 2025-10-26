@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
@@ -80,12 +81,17 @@ public class AiServiceImpl implements AiService {
 
     private final SpringAiChatGateway chatGateway;
     private final ObjectMapper mapper;
+    private final java.util.concurrent.ConcurrentMap<String, String> callStepMap = new java.util.concurrent.ConcurrentHashMap<>();
     private final ConversationMemoryService memoryService;
     private final ToolRegistry toolRegistry;
     private final AiToolExecutor toolExecutor;
     private final Compatibility compatibility;
     private final AiProperties.Mode aiMode;
     private final String model;
+
+    private static String userConvCallKey(String userId, String convId, String callId) {
+        return userId + "|" + convId + "|" + callId;
+    }
 
     @Value("${ai.setpjson.context-window:0}")
     private int setpjsonContextWindow;
@@ -1793,6 +1799,10 @@ public class AiServiceImpl implements AiService {
         }
 
         state.appendClientResults();
+
+        // 优先复用第一轮的 stepId（多轮关键）
+        reuseStepIdIfClientResults(state);
+
         // === add begin: log clientResults received & attached ===
         if (state.hasClientResults) {
             log.info("[V2] received clientResults: count={}, ids={}",
@@ -1884,6 +1894,10 @@ public class AiServiceImpl implements AiService {
                     ToolCallDTO fallback = buildClientToolFallback(state, summary);
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
+
+                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
+
                         sink.next(toNdjson(NdjsonEvent.builder()
                                 .event("pendingClientCalls")
                                 .ts(now())
@@ -1966,6 +1980,13 @@ public class AiServiceImpl implements AiService {
                 if (!clientCalls.isEmpty()) {
                     state.pendingClientCalls.addAll(clientCalls);
 
+                    // 绑定 callId -> stepId，供后续轮次复用 S1
+                    for (var c : clientCalls) {
+                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                        log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
+                    }
+
+
                     sink.next(toNdjson(NdjsonEvent.builder()
                             .event("pendingClientCalls")
                             .ts(now())
@@ -2020,6 +2041,10 @@ public class AiServiceImpl implements AiService {
                         // 客户端工具：并行下发给前端，不阻塞服务端回路
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
+                            for (var c : split.client()) {
+                                callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                                log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
+                            }
                             // === add begin: log pending client calls ===
                             log.info("[V2] pendingClientCalls: count={}, ids={}",
                                     split.client().size(),
@@ -2085,6 +2110,10 @@ public class AiServiceImpl implements AiService {
                             : null;
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
+
+                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
+
                         sink.next(toNdjson(NdjsonEvent.builder()
                                 .event("pendingClientCalls")
                                 .ts(now())
@@ -2123,6 +2152,9 @@ public class AiServiceImpl implements AiService {
         payload.put("tools", state.mergedTools);
         payload.put("tool_choice", "auto");
 
+        // === PATCH 3: reuse stepId by tool_call_id (multi-round) ===
+        reuseStepIdIfClientResults(state);
+
         log.debug("[V2] continueWithoutDecision clientChoice={} hasClientTools={} allowClientTools={}",
                 clientChoice, hasClientTools, allowClientTools);
 
@@ -2139,6 +2171,11 @@ public class AiServiceImpl implements AiService {
 
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
+                            for (var c : split.client()) {
+                                callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                                log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
+                            }
+
                             // === add begin: log pending client calls ===
                             log.info("[V2] pendingClientCalls: count={}, ids={}",
                                     split.client().size(),
@@ -2200,6 +2237,10 @@ public class AiServiceImpl implements AiService {
                             ? buildClientToolFallback(state, content) : null;
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
+
+                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
+
                         sink.next(toNdjson(NdjsonEvent.builder()
                                 .event("pendingClientCalls")
                                 .ts(now())
@@ -2446,9 +2487,8 @@ public class AiServiceImpl implements AiService {
     }
 
     private void emitStep(FluxSink<String> sink, StepState state) {
-        if (!state.finished) {
-            maybePersistStepDraft(state);
-        }
+
+        maybePersistStepDraft(state);
         maybePersistStepMemory(state);
         OrchestrationStep.Context emptyCtx = OrchestrationStep.Context.builder()
                 .messages(List.of())
@@ -2490,6 +2530,13 @@ public class AiServiceImpl implements AiService {
         int seq = 1;
         String stepId = state.stepId;
         try {
+            // 先承接历史最大 seq（保证多轮同一 stepId 下连续且不冲突）
+            try {
+                Integer max = memoryService.findMaxSeq(state.userId, state.conversationId, stepId);
+                if (max != null && max > 0) {
+                    seq = max + 1;
+                }
+            } catch (Exception ignore) {}
             if (state.hasUserPrompt && state.request != null) {
                 String question = state.request.getQ();
                 if (question != null && !question.isBlank()) {
@@ -2505,6 +2552,22 @@ public class AiServiceImpl implements AiService {
                     );
                 }
             }
+
+            // 2) NEW: 落下发给前端的 tool_calls（assistant, payload.tool_calls）
+            if (state.pendingClientCalls != null && !state.pendingClientCalls.isEmpty()) {
+                String payload = buildAssistantToolCallsPayload(state.pendingClientCalls); // 见下方助手方法
+                memoryService.upsertMessage(
+                        state.userId,
+                        state.conversationId,
+                        "assistant",
+                        "",                  // content 置空
+                        payload,             // payload 带 tool_calls
+                        stepId,
+                        seq++,
+                        STATE_DRAFT
+                );
+            }
+
             if (!state.serverResults.isEmpty()) {
                 for (ToolResultDTO result : state.serverResults) {
                     memoryService.upsertMessage(
@@ -2519,12 +2582,57 @@ public class AiServiceImpl implements AiService {
                     );
                 }
             }
+
+            // 4) NEW: 落客户端回传的工具结果（tool, payload=client JSON）
+            if (state.clientResults != null && !state.clientResults.isEmpty()) {
+                for (ToolResultDTO r : state.clientResults) {
+                    String payload = buildClientToolResultPayload(r);
+                    memoryService.upsertMessage(
+                            state.userId,
+                            state.conversationId,
+                            "tool",
+                            null,
+                            payload,
+                            stepId,
+                            seq++,
+                            STATE_DRAFT
+                    );
+                    // 回传完成即可清理映射，防内存增长（可选）
+                    if (StringUtils.hasText(r.getTool_call_id())) {
+                        callStepMap.remove(userConvCallKey(state.userId, state.conversationId, r.getTool_call_id()));
+                    }
+                }
+            }
+
             state.draftAppended = true;
         } catch (Exception ex) {
             log.warn("Failed to append step DRAFT userId={} conversationId={} stepId={}",
                     state.userId, state.conversationId, stepId, ex);
         }
     }
+
+    // 把 pendingClientCalls 转成 OpenAI 兼容的 payload.tool_calls
+    private String buildAssistantToolCallsPayload(List<ToolCallDTO> calls) throws Exception {
+        var arr = mapper.createArrayNode();
+        for (var c : calls) {
+            var fn = mapper.createObjectNode();
+            fn.put("name", c.getName());
+            // OpenAI 规范：arguments 是字符串
+            fn.put("arguments", mapper.writeValueAsString(c.getArguments()));
+
+            var call = mapper.createObjectNode();
+            call.put("id", c.getId());
+            call.put("type", "function");
+            call.set("function", fn);
+
+            arr.add(call);
+        }
+        var root = mapper.createObjectNode();
+        root.set("tool_calls", arr);
+        root.put("source", "client-request");
+        return mapper.writeValueAsString(root);
+    }
+
 
     private void maybePersistStepMemory(StepState state) {
         if (state.memoryAppended || !state.finished || !state.hasIdentifiers()) {
@@ -2697,7 +2805,7 @@ public class AiServiceImpl implements AiService {
 
     private class StepState {
         private final V2StepNdjsonRequest request;
-        private final String stepId = "step-" + UUID.randomUUID();
+        private String stepId = "step-" + UUID.randomUUID();
         private final String userId;
         private final String conversationId;
         private final boolean hasUserPrompt;
@@ -2720,6 +2828,16 @@ public class AiServiceImpl implements AiService {
         private String assistantSummary;
         private String finalAnswer;
         private String error;
+
+        // === PATCH 2: StepState 里增加这些指针 ===
+        boolean userPersisted = false;         // 本轮 user 是否已落草稿
+        int persistedPendingBatches = 0;       // assistant(tool_calls) 已落批次数
+        int persistedServerResults = 0;        // serverResults 已落数量
+        int persistedClientResults = 0;        // clientResults 已落数量
+
+        // 可选：仅用于日志
+        boolean reusedStepId = false;
+
 
         StepState(V2StepNdjsonRequest request) {
             this.request = request;
@@ -2802,6 +2920,44 @@ public class AiServiceImpl implements AiService {
         if (s == null) return null;
         return s.length() <= max ? s : s.substring(0, max) + "…(" + s.length() + ")";
     }
+
+    private void reuseStepIdIfClientResults(StepState state) {
+        if (state.request == null || state.request.getClientResults() == null || state.request.getClientResults().isEmpty()) {
+            return;
+        }
+        var first = state.request.getClientResults().get(0);
+        String callId = first.getTool_call_id();
+        String key = userConvCallKey(state.userId, state.conversationId, callId);
+
+        // ① 先查内存
+        String s1 = callStepMap.get(key);
+        // ② 再用 DB 兜底（见 C 节补充接口）
+        if (!StringUtils.hasText(s1)) {
+            s1 = memoryService.findStepIdByToolCallId(state.userId, state.conversationId, callId);
+        }
+        if (StringUtils.hasText(s1)) {
+            state.stepId = s1;
+            state.reusedStepId = true;
+            log.info("[V2] reuse stepId={} by tool_call_id={}", s1, callId);
+        }
+    }
+
+    private String buildClientToolResultPayload(ToolResultDTO r) {
+        try {
+            var root = mapper.createObjectNode();
+            root.put("tool_call_id", r.getTool_call_id());
+            root.put("name", r.getName());
+            root.put("content", r.getContent() == null ? "" : r.getContent()); // 原样字符串
+            root.put("source", "client");
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            log.warn("buildClientToolResultPayload failed, fallback minimal", e);
+            String id = r.getTool_call_id() == null ? "" : r.getTool_call_id();
+            String nm = r.getName() == null ? "" : r.getName();
+            return "{\"tool_call_id\":\"" + id + "\",\"name\":\"" + nm + "\"}";
+        }
+    }
+
 
 
 }
