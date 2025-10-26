@@ -57,7 +57,7 @@
     "conversationId": "demo-003",
     "q": "调用 hello_ai，给我一声问候。",
     "toolChoice": "hello_ai",
-    "responseMode": "decision",
+    "responseMode": "step-json-ndjson",
     "clientResults": [],
     "clientTools": []
   },
@@ -66,7 +66,7 @@
     "conversationId": "demo-002",
     "q": "基于刚才的网页标题，给我一句中文总结。",
     "toolChoice": "none",
-    "responseMode": "final",
+    "responseMode": "step-json-ndjson",
     "clientResults": [],
     "clientTools": []
   },
@@ -75,7 +75,7 @@
     "conversationId": "demo-004",
     "q": "把这个链接打开并把标题通过系统通知告诉我：https://www.example.com",
     "toolChoice": "auto",
-    "responseMode": "decision",
+    "responseMode": "step-json-ndjson",
     "clientResults": [],
     "clientTools": [
       {
