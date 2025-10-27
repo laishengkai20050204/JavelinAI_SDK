@@ -17,6 +17,9 @@ ai:
       enabled: true
       default-ttl-seconds: 600
       ignore-args: ["timestamp","requestId","nonce"]
+    callStep:
+      ttl-minutes: 30
+      maximum-size: 10000
   memory:
     storage: database        # set to in-memory to use the in-memory implementation
     max-messages: 12

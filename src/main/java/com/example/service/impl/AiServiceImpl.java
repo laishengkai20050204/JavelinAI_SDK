@@ -93,7 +93,7 @@ public class AiServiceImpl implements AiService {
         return userId + "|" + convId + "|" + callId;
     }
 
-    @Value("${ai.setpjson.context-window:0}")
+    @Value("${ai.stepjson.context-window:0}")
     private int setpjsonContextWindow;
 
     @Value("${ai.think.enabled:false}")
@@ -1827,7 +1827,10 @@ public class AiServiceImpl implements AiService {
             return Mono.empty();
         }
 
-        if (state.hasUserPrompt) {
+        String clientChoice = normalizeToolChoice(state.request != null ? state.request.getToolChoice() : null);
+        boolean allowDecision = !"none".equals(clientChoice);
+
+        if (state.hasUserPrompt && allowDecision) {
             sink.next(toNdjson(progressEvent("deciding")));
             return decideStep(state)
                     .flatMap(decision -> handleDecision(state, sink, decision));
@@ -1844,12 +1847,13 @@ public class AiServiceImpl implements AiService {
         payload.put("messages", messages);
         attachScope(payload, state.userId, state.conversationId);
 
-        // ✅ 统一使用 mergedTools（server + client），让模型“看得见”服务端工具，并保持外部化（由网关按 client schema 触发 proxy）
-        if (!state.mergedTools.isEmpty()) {
-            payload.put("tools", state.mergedTools);
-            payload.put("tool_choice", "auto"); // 让模型自由选择（避免强制只挑 client）
-        } else {
+        String clientChoice = normalizeToolChoice(state.request != null ? state.request.getToolChoice() : null);
+        if ("none".equals(clientChoice)) {
+            payload.put("tools", List.of());       // ✅ 禁止工具
             payload.put("tool_choice", "none");
+        } else {
+            payload.put("tools", state.mergedTools);   // ✅ 需要时才给工具
+            payload.put("tool_choice", clientChoice);  // auto/required
         }
 
         // 诊断：看 merged 中到底有哪些函数名

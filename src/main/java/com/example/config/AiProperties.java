@@ -34,9 +34,15 @@ public class AiProperties {
     private Client client = new Client();
     private StepJson stepjson = new StepJson();
 
+
     @Data
     public static class Tools {
         private int maxLoops = 2;
+        private CallStep callStep = new CallStep();
+        @Data public static class CallStep {
+            private long ttlMinutes = 30;
+            private long maximumSize = 10000;
+        }
     }
 
     @Data
