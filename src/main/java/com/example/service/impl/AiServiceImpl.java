@@ -14,6 +14,7 @@ import com.example.service.impl.dto.ToolCall;
 import com.example.service.impl.dto.ToolCallDTO;
 import com.example.service.impl.dto.ToolResultDTO;
 import com.example.service.impl.dto.V2StepNdjsonRequest;
+import com.example.service.support.HistoryNormalizer;
 import com.example.tools.AiToolExecutor;
 import com.example.tools.ToolRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -92,6 +93,7 @@ public class AiServiceImpl implements AiService {
     private final AiProperties.Mode aiMode;
     private final AiProperties props;
     private final String model;
+    private final HistoryNormalizer historyNormalizer;
 
     private static String userConvCallKey(String userId, String convId, String callId) {
         return userId + "|" + convId + "|" + callId;
@@ -140,7 +142,8 @@ public class AiServiceImpl implements AiService {
             ConversationMemoryService memoryService,
             ToolRegistry toolRegistry,
             AiToolExecutor toolExecutor,
-            AiProperties aiProperties
+            AiProperties aiProperties,
+            HistoryNormalizer historyNormalizer
     ) {
         this.chatGateway = chatGateway;
         this.mapper = mapper;
@@ -152,6 +155,7 @@ public class AiServiceImpl implements AiService {
         this.compatibility = mode == AiProperties.Mode.OLLAMA ? Compatibility.OLLAMA : Compatibility.OPENAI;
         this.model = StringUtils.hasText(aiProperties.getModel()) ? aiProperties.getModel() : "gpt-4o-mini";
         this.props = aiProperties;
+        this.historyNormalizer = historyNormalizer;
         this.callStepCache = Caffeine.newBuilder()
                 .expireAfterWrite(Duration.ofMinutes(props.getTools().getCallStep().getTtlMinutes()))
                 .maximumSize(props.getTools().getCallStep().getMaximumSize())
@@ -2593,15 +2597,18 @@ public class AiServiceImpl implements AiService {
                 }
             }
 
-            // 2) NEW: 落下发给前端的 tool_calls（assistant, payload.tool_calls）
-            if (state.pendingClientCalls != null && !state.pendingClientCalls.isEmpty()) {
-                String payload = buildAssistantToolCallsPayload(state.pendingClientCalls); // 见下方助手方法
+            // 2) 落 "assistant(tool_calls)" — 优先从对话里抓模型产出的 tool_calls，抓不到再用 pendingClientCalls
+            String toolCallsPayload = findAssistantToolCallsPayloadFromConversation(state.conversation);
+            if (toolCallsPayload == null && state.pendingClientCalls != null && !state.pendingClientCalls.isEmpty()) {
+                toolCallsPayload = buildAssistantToolCallsPayload(state.pendingClientCalls); // 你的原方法
+            }
+            if (toolCallsPayload != null) {
                 memoryService.upsertMessage(
                         state.userId,
                         state.conversationId,
                         "assistant",
-                        "",                  // content 置空
-                        payload,             // payload 带 tool_calls
+                        "",                      // content 置空
+                        toolCallsPayload,        // payload={"tool_calls":[...],...}
                         stepId,
                         seq++,
                         STATE_DRAFT
@@ -2672,6 +2679,46 @@ public class AiServiceImpl implements AiService {
         root.put("source", "client-request");
         return mapper.writeValueAsString(root);
     }
+
+    /**
+     * 从 state.conversation 中抓最近一条 assistant(tool_calls)，并序列化为 payload JSON：
+     * {"tool_calls":[...], "source":"model"}
+     */
+    private @Nullable String findAssistantToolCallsPayloadFromConversation(List<Map<String, Object>> conversation) {
+        if (conversation == null || conversation.isEmpty()) return null;
+        for (int i = conversation.size() - 1; i >= 0; i--) {
+            Map<String, Object> msg = conversation.get(i);
+            if (msg == null) continue;
+            Object role = msg.get("role");
+            if (!"assistant".equals(role)) continue;
+
+            // OpenAI 样式：assistant 消息里直接带 tool_calls
+            Object toolCalls = msg.get("tool_calls");
+            if (toolCalls instanceof List<?> list && !list.isEmpty()) {
+                try {
+                    var root = mapper.createObjectNode();
+                    root.set("tool_calls", mapper.valueToTree(list));
+                    root.put("source", "model");
+                    return mapper.writeValueAsString(root);
+                } catch (Exception e) {
+                    log.warn("findAssistantToolCallsPayloadFromConversation: serialize failed", e);
+                }
+            }
+
+            // 有些实现把整条 message 放在 payload 里（兼容处理）
+            Object payload = msg.get("payload");
+            if (payload instanceof String s && !s.isBlank()) {
+                try {
+                    JsonNode node = mapper.readTree(s);
+                    if (node.has("tool_calls") && node.get("tool_calls").isArray() && node.get("tool_calls").size() > 0) {
+                        return s;
+                    }
+                } catch (Exception ignore) {}
+            }
+        }
+        return null;
+    }
+
 
 
     private void maybePersistStepMemory(StepState state) {
@@ -2903,12 +2950,15 @@ public class AiServiceImpl implements AiService {
         private void buildInitialConversation() {
             conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
             if (userId != null && conversationId != null) {
-                List<Map<String, Object>> history = memoryService.getContext(
+                List<Map<String, Object>> raw = memoryService.getContext(
                         userId,
                         conversationId,
                         resolveMemoryWindow(50)
                 );
-                conversation.addAll(history);
+                // 关键：根据当前兼容模式做规范化
+                boolean openAiCompatible = (AiServiceImpl.this.compatibility == Compatibility.OPENAI);
+                List<Map<String, Object>> normalized = historyNormalizer.normalize(raw, openAiCompatible);
+                conversation.addAll(normalized);
             }
             if (hasUserPrompt) {
                 conversation.add(createMessage("user", request.getQ()));
