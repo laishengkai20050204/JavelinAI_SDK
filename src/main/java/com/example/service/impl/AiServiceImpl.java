@@ -22,6 +22,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,17 +84,19 @@ public class AiServiceImpl implements AiService {
 
     private final SpringAiChatGateway chatGateway;
     private final ObjectMapper mapper;
-    private final java.util.concurrent.ConcurrentMap<String, String> callStepMap = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Cache<String, String> callStepCache;
     private final ConversationMemoryService memoryService;
     private final ToolRegistry toolRegistry;
     private final AiToolExecutor toolExecutor;
     private final Compatibility compatibility;
     private final AiProperties.Mode aiMode;
+    private final AiProperties props;
     private final String model;
 
     private static String userConvCallKey(String userId, String convId, String callId) {
         return userId + "|" + convId + "|" + callId;
     }
+
 
     @Value("${ai.stepjson.context-window:0}")
     private int setpjsonContextWindow;
@@ -126,7 +131,7 @@ public class AiServiceImpl implements AiService {
     @Value("${ai.client.retry.backoff-ms:300}")
     private long clientRetryBackoffMs;
 
-    @Value("${ai.setpjson.heartbeat-seconds:5}")
+    @Value("${ai.stepjson.heartbeat-seconds:5}")
     private long setpjsonHeartbeatSeconds;
 
     public AiServiceImpl(
@@ -146,6 +151,11 @@ public class AiServiceImpl implements AiService {
         this.aiMode = mode;
         this.compatibility = mode == AiProperties.Mode.OLLAMA ? Compatibility.OLLAMA : Compatibility.OPENAI;
         this.model = StringUtils.hasText(aiProperties.getModel()) ? aiProperties.getModel() : "gpt-4o-mini";
+        this.props = aiProperties;
+        this.callStepCache = Caffeine.newBuilder()
+                .expireAfterWrite(Duration.ofMinutes(props.getTools().getCallStep().getTtlMinutes()))
+                .maximumSize(props.getTools().getCallStep().getMaximumSize())
+                .build();
         log.info("AI service initialized with mode={} model={}", this.aiMode, this.model);
     }
 
@@ -1667,7 +1677,11 @@ public class AiServiceImpl implements AiService {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", model);
             payload.put("messages", updated);
-            payload.put("tool_choice", "none");
+            // 让续写阶段也按 toolChoice 决定
+            payload.put("tool_choice", normalizedChoice);
+            // 提供可用工具（无 clientTools 上下文，这里给服务端工具即可）
+            payload.put("tools", toolRegistry.openAiServerToolsSchema());
+
             if (deltaText)  payload.put("_delta_text", true);
             if (mergeFinal) payload.put("_merge_final", true);
             if (!deltaText && !mergeFinal) payload.put("_raw_stream", rawStream);
@@ -1884,6 +1898,26 @@ public class AiServiceImpl implements AiService {
                 .map(json -> new DecisionPayload(parseDecision(json), json, extractContentSafely(json)));
     }
 
+    private void rememberCallStep(String toolCallId, String stepId) {
+        callStepCache.put(toolCallId, stepId);
+    }
+
+    @Nullable
+    private String findStepIdByToolCallId(String toolCallId) {
+        String stepId = callStepCache.getIfPresent(toolCallId);
+        if (stepId == null) {
+            // 兜底：若你已有 mapper 就查 DB，没有可直接返回 null
+//            try { stepId = toolCallMapper.selectStepIdByToolCallId(toolCallId); } catch (Exception ignore) {}
+            return null;
+        }
+        return stepId;
+    }
+
+    private void forgetCallStep(String toolCallId) {
+        callStepCache.invalidate(toolCallId);
+        // （可选）同步清理 DB：toolCallMapper.deleteByToolCallId(toolCallId);
+    }
+
 
     private Mono<Void> handleDecision(StepState state, FluxSink<String> sink, DecisionPayload payload) {
         return Mono.defer(() -> {
@@ -1899,7 +1933,7 @@ public class AiServiceImpl implements AiService {
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
 
-                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        rememberCallStep(fallback.getId(), state.stepId);
                         log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
 
                         sink.next(toNdjson(NdjsonEvent.builder()
@@ -1986,7 +2020,7 @@ public class AiServiceImpl implements AiService {
 
                     // 绑定 callId -> stepId，供后续轮次复用 S1
                     for (var c : clientCalls) {
-                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                        rememberCallStep(c.getId(), state.stepId);
                         log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
                     }
 
@@ -2046,7 +2080,7 @@ public class AiServiceImpl implements AiService {
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
                             for (var c : split.client()) {
-                                callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                                rememberCallStep(c.getId(), state.stepId);
                                 log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
                             }
                             // === add begin: log pending client calls ===
@@ -2108,14 +2142,15 @@ public class AiServiceImpl implements AiService {
                     }
 
 
-                    // 关键改动：仅当允许客户端工具时才启用 fallback（避免前端传 none 时又被 fallback 打开工具）
-                    ToolCallDTO fallback = (allowClientTools && state.pendingClientCalls.isEmpty())
+                    // 只看 toolChoice：none 不下发 fallback；其它值按逻辑决定
+                    boolean allowByChoice = !"none".equals(clientChoice);
+                    ToolCallDTO fallback = (allowByChoice && state.pendingClientCalls.isEmpty())
                             ? buildClientToolFallback(state, content)
                             : null;
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
 
-                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        rememberCallStep(fallback.getId(), state.stepId);
                         log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
 
                         sink.next(toNdjson(NdjsonEvent.builder()
@@ -2148,13 +2183,14 @@ public class AiServiceImpl implements AiService {
         payload.put("messages", messages);
         attachScope(payload, state.userId, state.conversationId);
 
-        // === 关键改动：没有新决策时，也只按前端 toolChoice，且仅暴露「客户端工具」
+
         String clientChoice = normalizeToolChoice(state.request != null ? state.request.getToolChoice() : null);
         boolean hasClientTools = state.clientTools != null && !state.clientTools.isEmpty();
         boolean allowClientTools = hasClientTools && !"none".equals(clientChoice);
 
-        payload.put("tools", state.mergedTools);
-        payload.put("tool_choice", "auto");
+        payload.put("tools", state.mergedTools);   // 总是给 merged（server + client）
+        payload.put("tool_choice", clientChoice);  // 用前端传入/默认的 toolChoice
+        log.debug("[V2] continueWithoutDecision tools=merged tool_choice={}", clientChoice);
 
         // === PATCH 3: reuse stepId by tool_call_id (multi-round) ===
         reuseStepIdIfClientResults(state);
@@ -2176,7 +2212,7 @@ public class AiServiceImpl implements AiService {
                         if (!split.client().isEmpty()) {
                             state.pendingClientCalls.addAll(split.client());
                             for (var c : split.client()) {
-                                callStepMap.put(userConvCallKey(state.userId, state.conversationId, c.getId()), state.stepId);
+                                rememberCallStep(c.getId(), state.stepId);
                                 log.debug("[V2] bind callId->stepId: {} -> {}", c.getId(), state.stepId);
                             }
 
@@ -2242,7 +2278,7 @@ public class AiServiceImpl implements AiService {
                     if (fallback != null) {
                         state.pendingClientCalls.add(fallback);
 
-                        callStepMap.put(userConvCallKey(state.userId, state.conversationId, fallback.getId()), state.stepId);
+                        rememberCallStep(fallback.getId(), state.stepId);
                         log.debug("[V2] bind callId->stepId(fallback): {} -> {}", fallback.getId(), state.stepId);
 
                         sink.next(toNdjson(NdjsonEvent.builder()
@@ -2603,7 +2639,7 @@ public class AiServiceImpl implements AiService {
                     );
                     // 回传完成即可清理映射，防内存增长（可选）
                     if (StringUtils.hasText(r.getTool_call_id())) {
-                        callStepMap.remove(userConvCallKey(state.userId, state.conversationId, r.getTool_call_id()));
+                        forgetCallStep(r.getTool_call_id());
                     }
                 }
             }
@@ -2931,11 +2967,10 @@ public class AiServiceImpl implements AiService {
         }
         var first = state.request.getClientResults().get(0);
         String callId = first.getTool_call_id();
-        String key = userConvCallKey(state.userId, state.conversationId, callId);
 
-        // ① 先查内存
-        String s1 = callStepMap.get(key);
-        // ② 再用 DB 兜底（见 C 节补充接口）
+        // ① 先查本地缓存
+        String s1 = findStepIdByToolCallId(callId);
+        // ② 再用 DB 兜底（你已有 memoryService 接口）
         if (!StringUtils.hasText(s1)) {
             s1 = memoryService.findStepIdByToolCallId(state.userId, state.conversationId, callId);
         }
