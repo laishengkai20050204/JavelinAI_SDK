@@ -1967,6 +1967,10 @@ public class AiServiceImpl implements AiService {
             }
 
             List<ToolCall> toolCalls = decision.getToolCalls();
+            // 紧接着  List<ToolCall> toolCalls = decision.getToolCalls();
+            if (toolCalls != null && !toolCalls.isEmpty()) {
+                state.modelToolCallsPayload = buildAssistantToolCallsPayloadFromModel(toolCalls);
+            }
             List<AiToolExecutor.ToolCall> allCalls = new ArrayList<>();
             List<AiToolExecutor.ToolCall> serverCalls = new ArrayList<>();
             Map<String, String> serverNameById = new HashMap<>();
@@ -2047,6 +2051,31 @@ public class AiServiceImpl implements AiService {
             });
         });
     }
+
+    private String buildAssistantToolCallsPayloadFromModel(List<ToolCall> toolCalls) {
+        try {
+            var arr = mapper.createArrayNode();
+            for (ToolCall c : toolCalls) {
+                var fn = mapper.createObjectNode();
+                fn.put("name", c.getName());
+                fn.put("arguments", Optional.ofNullable(c.getArgumentsJson()).orElse("{}"));
+
+                var call = mapper.createObjectNode();
+                call.put("id", c.getId());
+                call.put("type", "function");
+                call.set("function", fn);
+                arr.add(call);
+            }
+            var root = mapper.createObjectNode();
+            root.set("tool_calls", arr);
+            root.put("source", "model"); // ⬅ 标记来自模型决策
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            log.warn("buildAssistantToolCallsPayloadFromModel failed", e);
+            return null;
+        }
+    }
+
 
 
     private Mono<Void> continueAfterServerTools(StepState state, FluxSink<String> sink, String fallbackSummary) {
@@ -2597,6 +2626,22 @@ public class AiServiceImpl implements AiService {
                 }
             }
 
+            // ✅ 只落“本轮模型决策”的 tool_calls（source=model），不要扫历史
+            if (!state.modelToolCallsPersisted && state.modelToolCallsPayload != null && !state.modelToolCallsPayload.isBlank()) {
+                memoryService.upsertMessage(
+                        state.userId,
+                        state.conversationId,
+                        "assistant",
+                        "",                                // content 为空
+                        state.modelToolCallsPayload,       // payload 存 tool_calls
+                        state.stepId,
+                        seq++,
+                        STATE_DRAFT
+                );
+                state.modelToolCallsPersisted = true;
+            }
+
+
             // 2) 落 "assistant(tool_calls)" — 优先从对话里抓模型产出的 tool_calls，抓不到再用 pendingClientCalls
             String toolCallsPayload = findAssistantToolCallsPayloadFromConversation(state.conversation);
             if (toolCallsPayload == null && state.pendingClientCalls != null && !state.pendingClientCalls.isEmpty()) {
@@ -2915,6 +2960,12 @@ public class AiServiceImpl implements AiService {
         private String assistantSummary;
         private String finalAnswer;
         private String error;
+        // 会话中“历史消息”的结束下标，仅扫描该下标之后的“本轮新增”
+        int historyEndIndex = 0;
+
+        // 本轮模型产生的 tool_calls（payload JSON，source=model）
+        String modelToolCallsPayload = null;
+        boolean modelToolCallsPersisted = false;
 
         // === PATCH 2: StepState 里增加这些指针 ===
         boolean userPersisted = false;         // 本轮 user 是否已落草稿
@@ -2951,11 +3002,7 @@ public class AiServiceImpl implements AiService {
             conversation.add(createMessage("system", SYSTEM_PROMPT_CORE));
             if (userId != null && conversationId != null) {
                 List<Map<String, Object>> raw = memoryService.getContext(
-                        userId,
-                        conversationId,
-                        resolveMemoryWindow(50)
-                );
-                // 关键：根据当前兼容模式做规范化
+                        userId, conversationId, resolveMemoryWindow(50));
                 boolean openAiCompatible = (AiServiceImpl.this.compatibility == Compatibility.OPENAI);
                 List<Map<String, Object>> normalized = historyNormalizer.normalize(raw, openAiCompatible);
                 conversation.addAll(normalized);
@@ -2963,6 +3010,9 @@ public class AiServiceImpl implements AiService {
             if (hasUserPrompt) {
                 conversation.add(createMessage("user", request.getQ()));
             }
+            // ✅ 历史分界点：后续仅对 historyEndIndex 之后的消息做“本轮入库”
+            historyEndIndex = conversation.size();
+
         }
 
         Map<String, Object> startedData() {
