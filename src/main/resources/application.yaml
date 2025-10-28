@@ -12,7 +12,7 @@ ai:
     enabled: true               # enable optional thinking mode
 #    level: medium               # optional: send low/medium/high when the upstream supports it
   tools:
-    max-loops: 5
+    max-loops: 2
     dedup:
       enabled: true
       default-ttl-seconds: 600
@@ -31,6 +31,9 @@ ai:
     retry:
       max-attempts: 3
       backoff-ms: 500
+  debug:
+    log-raw-response: true
+    include-raw-in-gateway-json: true
 
 
 

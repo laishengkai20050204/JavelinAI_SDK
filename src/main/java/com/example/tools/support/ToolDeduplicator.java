@@ -1,7 +1,7 @@
 package com.example.tools.support;
 
-import com.example.service.impl.mapper.ToolExecutionMapper;
-import com.example.service.impl.mapper.model.ToolExecutionRecord;
+import com.example.mapper.ToolExecutionMapper;
+import com.example.mapper.model.ToolExecutionRecord;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;

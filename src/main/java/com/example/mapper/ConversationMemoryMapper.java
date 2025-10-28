@@ -1,4 +1,4 @@
-package com.example.service.impl.mapper;
+package com.example.mapper;
 
 import com.example.service.impl.entity.ConversationMessageEntity;
 import org.apache.ibatis.annotations.Mapper;

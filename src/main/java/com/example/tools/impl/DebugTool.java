@@ -13,18 +13,18 @@ import java.util.Map;
 @Slf4j
 @AiToolComponent
 @RequiredArgsConstructor
-public class HelloAiTool implements AiTool {
+public class DebugTool implements AiTool {
 
     private final ObjectMapper mapper; // 你项目里已有 ObjectMapper Bean
 
     @Override
     public String name() {
-        return "hello_ai";
+        return "debug_tool";
     }
 
     @Override
     public String description() {
-        return "Print 'hello ai' to log and return a short text payload.";
+        return "Print 'debug tool' to log and return a short text payload.";
     }
 
     @Override
@@ -39,11 +39,11 @@ public class HelloAiTool implements AiTool {
 
     @Override
     public ToolResult execute(Map<String, Object> args) throws Exception {
-        log.info("hello ai");
+        log.info("debug tool");
         // 随便返回点内容：可以是纯文本，也可以是JSON字符串。执行器会原样放进 tool 的 content。
         String payload = mapper.writeValueAsString(Map.of(
                 "type", "text",
-                "value", "hello ai from tool"
+                "value", "debug from tool"
         ));
         return new ToolResult(name(), payload);
     }

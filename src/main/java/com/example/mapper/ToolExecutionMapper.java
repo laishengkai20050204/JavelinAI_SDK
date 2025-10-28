@@ -1,6 +1,6 @@
-package com.example.service.impl.mapper;
+package com.example.mapper;
 
-import com.example.service.impl.mapper.model.ToolExecutionRecord;
+import com.example.mapper.model.ToolExecutionRecord;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 

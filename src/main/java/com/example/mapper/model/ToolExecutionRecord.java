@@ -1,4 +1,4 @@
-package com.example.service.impl.mapper.model;
+package com.example.mapper.model;
 
 import lombok.Data;
 

@@ -34,6 +34,17 @@ public class AiProperties {
     private Client client = new Client();
     private StepJson stepjson = new StepJson();
 
+    @Data
+    public static class Debug {
+        /** 是否把 provider 的原生元信息（metadata/raw）打印到日志（DEBUG） */
+        private boolean logRawResponse = true;
+        /** 是否在网关返回的 JSON 中加入 _provider_raw 字段（仅调试时打开，可能很大） */
+        private boolean includeRawInGatewayJson = false;
+    }
+
+    /** 调试相关开关（默认全开日志、默认不回传） */
+    private Debug debug = new Debug();
+
 
     @Data
     public static class Tools {

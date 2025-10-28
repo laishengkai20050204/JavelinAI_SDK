@@ -58,12 +58,37 @@ public class SpringAiChatGateway {
 
     private String executeCall(Map<String, Object> payload, AiProperties.Mode mode) {
         Prompt prompt = toPrompt(payload, mode);
-        if (log.isDebugEnabled() && prompt.getOptions() instanceof FunctionCallingOptions opts) {
-            log.debug("Executing chat call with model={} mode={}", opts.getModel(), mode);
-        }
+
+        // 请求预览（日志 + 对象）
+        ObjectNode reqPreview = logOutgoingPayloadJson(prompt, payload, mode);
+
+        // 调模型
         ChatResponse response = chatModel.call(prompt);
-        return formatResponse(response, mode);
+
+        // 响应元信息 + 决策日志
+        if (log.isDebugEnabled()) {
+            logIncomingRawJson(response);      // usage / rate limit 等
+            logAssistantDecision(response);    // 把 tool_calls 打出来
+        }
+
+        // 归一化为你现有的网关返回
+        String out = formatResponse(response, mode);
+
+        // （仅调试时）把 请求预览 / 原生元信息 / 助手决策 一起塞回 JSON
+        if (log.isDebugEnabled()) {
+            try {
+                ObjectNode root = (ObjectNode) mapper.readTree(out);
+                root.set("_provider_request", reqPreview);
+                root.set("_provider_raw", mapper.valueToTree(extractProviderRaw(response)));
+                root.set("_provider_assistant", buildAssistantDecisionNode(response)); // ← 就放这里
+                out = mapper.writeValueAsString(root);
+            } catch (Exception ignore) {}
+        }
+        return out;
     }
+
+
+
 
     private Flux<String> executeStream(Map<String, Object> payload, AiProperties.Mode mode) {
         Prompt prompt = toPrompt(payload, mode);
@@ -87,8 +112,167 @@ public class SpringAiChatGateway {
                 .toList();
 
         FunctionCallingOptions options = buildOptions(payload, mode);
-        return new Prompt(messages, options);
+        Prompt prompt = new Prompt(messages, options);
+
+        return prompt;
     }
+
+    // 将即将发送给模型的请求以“OpenAI风格”JSON预览形式打印到日志（DEBUG级）
+    private ObjectNode logOutgoingPayloadJson(
+            Prompt prompt, Map<String, Object> originalPayload, AiProperties.Mode mode) {
+
+        if (!log.isDebugEnabled()) return mapper.createObjectNode();
+
+        ObjectNode preview = buildOutgoingPayloadPreview(prompt, originalPayload, mode); // ← 把你现有方法体抽出来
+        try {
+            log.debug("[AI-REQ] {}", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(preview));
+        } catch (Exception ignore) {}
+
+        return preview;
+    }
+
+    private ObjectNode buildOutgoingPayloadPreview(
+            Prompt prompt, Map<String, Object> originalPayload, AiProperties.Mode mode) {
+
+        ObjectNode root = mapper.createObjectNode();
+
+        // model
+        Object model = originalPayload.getOrDefault("model", properties.getModel());
+        if (model != null) root.put("model", String.valueOf(model));
+
+        // tool_choice
+        Object rawToolChoice = originalPayload.containsKey("toolChoice")
+                ? originalPayload.get("toolChoice")
+                : originalPayload.get("tool_choice");
+        if (rawToolChoice == null) {
+            root.put("tool_choice", "auto");
+        } else if (rawToolChoice instanceof String s) {
+            root.put("tool_choice", s);
+        } else {
+            root.set("tool_choice", mapper.valueToTree(rawToolChoice));
+        }
+
+        // 显式回显代理/并行设置（与你的 buildOptions 一致）
+        root.put("proxy_tool_calls", true);
+        root.put("parallel_tool_calls", false);
+
+        // tool_context
+        ObjectNode toolCtx = root.putObject("tool_context");
+        if (originalPayload.get("userId") != null) {
+            toolCtx.put("userId", String.valueOf(originalPayload.get("userId")));
+        }
+        if (originalPayload.get("conversationId") != null) {
+            toolCtx.put("conversationId", String.valueOf(originalPayload.get("conversationId")));
+        }
+
+        // messages
+        ArrayNode msgs = root.putArray("messages");
+        for (Message m : prompt.getInstructions()) {
+            if (m instanceof SystemMessage sm) {
+                ObjectNode n = msgs.addObject();
+                n.put("role", "system");
+                n.put("content", sm.getContent() == null ? "" : sm.getContent());
+            } else if (m instanceof UserMessage um) {
+                ObjectNode n = msgs.addObject();
+                n.put("role", "user");
+                n.put("content", um.getContent() == null ? "" : um.getContent());
+            } else if (m instanceof AssistantMessage am) {
+                ObjectNode n = msgs.addObject();
+                n.put("role", "assistant");
+                n.put("content", am.getContent() == null ? "" : am.getContent());
+                if (am.hasToolCalls()) {
+                    ArrayNode tcs = n.putArray("tool_calls");
+                    for (AssistantMessage.ToolCall tc : am.getToolCalls()) {
+                        ObjectNode t = tcs.addObject();
+                        t.put("id", tc.id());
+                        t.put("type", tc.type());
+                        ObjectNode fn = t.putObject("function");
+                        fn.put("name", tc.name());
+                        fn.put("arguments", tc.arguments());
+                    }
+                }
+            } else if (m instanceof ToolResponseMessage tm) {
+                for (ToolResponseMessage.ToolResponse tr : tm.getResponses()) {
+                    ObjectNode n = msgs.addObject();
+                    n.put("role", "tool");
+                    n.put("tool_call_id", tr.id());
+                    n.put("name", tr.name() == null ? "" : tr.name());
+                    n.put("content", tr.responseData() == null ? "" : tr.responseData());
+                }
+            }
+        }
+
+        // ====== tools ======
+        ArrayNode tools = root.putArray("tools");
+
+        // 1) 先拿请求体定义（tools + clientTools）
+        List<ToolDef> toolDefs = parseAllToolDefs(originalPayload);
+
+        String normalizedToolChoice = normalizeToolChoice(rawToolChoice);
+        String forcedFunction = forcedFunctionName(rawToolChoice);
+        Set<String> allowed = buildAllowedFunctions(toolDefs, forcedFunction, normalizedToolChoice);
+
+        // 为了避免重复
+        Set<String> added = new LinkedHashSet<>();
+
+        // 1.1 请求体里的定义（如果在 allowed 里才展示）
+        for (ToolDef def : toolDefs) {
+            if (!allowed.isEmpty() && !allowed.contains(def.name())) continue;
+            appendToolNode(tools, def.name(), def.desc(), def.schema(), def.execTarget());
+            added.add(def.name());
+        }
+
+        // 2) 回落到“服务器注册”的工具（FunctionCallback）
+        //    ——如果用户没有在 payload 里显式给 schema，就从回调里取 schema/desc
+        for (FunctionCallback cb : toolAdapter.functionCallbacks()) {
+            String name = cb.getName();
+            if (!allowed.isEmpty() && !allowed.contains(name)) continue;
+            if (added.contains(name)) continue;
+
+            JsonNode schema = safeParseSchema(cb.getInputTypeSchema());
+            String desc = cb.getDescription();
+            appendToolNode(tools, name, desc, schema, "server");
+            added.add(name);
+        }
+
+        // temperature（如有）
+        Object temperature = originalPayload.get("temperature");
+        if (temperature instanceof Number number) {
+            root.put("temperature", number.doubleValue());
+        } else if (temperature instanceof String str && org.springframework.util.StringUtils.hasText(str)) {
+            try { root.put("temperature", Double.parseDouble(str)); } catch (NumberFormatException ignored) {}
+        }
+
+        root.put("compatibility", mode.toString());
+        return root;
+    }
+
+    private void appendToolNode(ArrayNode tools, String name, String desc, JsonNode schema, String execTarget) {
+        ObjectNode t = tools.addObject();
+        t.put("type", "function");
+        ObjectNode fn = t.putObject("function");
+        fn.put("name", name);
+        if (org.springframework.util.StringUtils.hasText(desc)) {
+            fn.put("description", desc);
+        }
+        fn.set("parameters", schema != null ? schema : mapper.createObjectNode());
+        t.put("x-execTarget", execTarget != null ? execTarget : "server");
+    }
+
+    private JsonNode safeParseSchema(String schemaStr) {
+        if (!org.springframework.util.StringUtils.hasText(schemaStr)) {
+            // 默认空 schema：一个空对象
+            return mapper.createObjectNode().put("type", "object");
+        }
+        try {
+            return mapper.readTree(schemaStr);
+        } catch (Exception e) {
+            // 解析失败也给个兜底
+            return mapper.createObjectNode().put("type", "object");
+        }
+    }
+
+
 
     private List<Map<String, Object>> convertMessagesObject(Object messagesObj) {
         if (messagesObj instanceof List<?> rawList) {
@@ -357,12 +541,19 @@ public class SpringAiChatGateway {
 
         choice.put("finish_reason", "stop");
 
-        if (mode == AiProperties.Mode.OLLAMA) {
-            messageNode.put("model", Objects.toString(properties.getModel(), ""));
+        // 👇 可选：把 provider 原始信息塞进返回，方便前端/你直接看到“原生”
+        if (properties.getDebug() != null && properties.getDebug().isIncludeRawInGatewayJson()) {
+            Map<String, Object> raw = extractProviderRaw(response);
+            if (!raw.isEmpty()) {
+                try {
+                    root.set("_provider_raw", mapper.valueToTree(raw));
+                } catch (Exception ignore) {}
+            }
         }
 
         return root.toString();
     }
+
 
     private String formatStreamChunk(ChatResponse response, AiProperties.Mode mode) {
         Generation generation = response.getResult();
@@ -488,4 +679,90 @@ public class SpringAiChatGateway {
         @Override public String call(String argumentsJson) { throw new UnsupportedOperationException("frontend tool: " + toolDef.name()); }
         @Override public String call(String argumentsJson, ToolContext context) { throw new UnsupportedOperationException("frontend tool: " + toolDef.name()); }
     }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object meta) {
+        if (meta == null) return Collections.emptyMap();
+        if (meta instanceof Map<?, ?> m) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            m.forEach((k, v) -> out.put(String.valueOf(k), v));
+            return out;
+        }
+        try {
+            return mapper.convertValue(meta, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (IllegalArgumentException ex) {
+            return Map.of("value", String.valueOf(meta));
+        }
+    }
+
+    private Map<String, Object> extractProviderRaw(org.springframework.ai.chat.model.ChatResponse response) {
+        Map<String, Object> raw = new LinkedHashMap<>();
+        try {
+            Object respMeta = (response != null) ? response.getMetadata() : null;
+            if (respMeta != null) raw.put("response_metadata", asMap(respMeta));
+        } catch (Exception ignore) {}
+        try {
+            List<org.springframework.ai.chat.model.Generation> gens =
+                    (response != null) ? response.getResults() : null;
+            if (gens != null && !gens.isEmpty()) {
+                Object genMeta = gens.get(0).getMetadata();
+                if (genMeta != null) raw.put("generation_metadata", asMap(genMeta));
+            }
+        } catch (Exception ignore) {}
+        return raw;
+    }
+
+    private void logIncomingRawJson(org.springframework.ai.chat.model.ChatResponse response) {
+        try {
+            Map<String, Object> raw = extractProviderRaw(response);
+            if (!raw.isEmpty()) {
+                log.debug("[AI-RESP] {}", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(raw));
+            } else {
+                log.debug("[AI-RESP] <no metadata available>");
+            }
+        } catch (Exception e) {
+            log.debug("[AI-RESP] <failed to serialize>: {}", e.toString());
+        }
+    }
+
+    private void logAssistantDecision(ChatResponse response) {
+        try {
+            ObjectNode n = buildAssistantDecisionNode(response);
+            if (n.size() > 0) {
+                log.debug("[AI-RESP:MSG] {}", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(n));
+            } else {
+                log.debug("[AI-RESP:MSG] <no assistant output>");
+            }
+        } catch (Exception e) {
+            log.debug("[AI-RESP:MSG] <failed to serialize>: {}", e.toString());
+        }
+    }
+
+    private ObjectNode buildAssistantDecisionNode(ChatResponse response) {
+        ObjectNode n = mapper.createObjectNode();
+        if (response == null || response.getResults() == null || response.getResults().isEmpty()) return n;
+
+        Generation gen = response.getResults().get(0);
+        if (gen == null || gen.getOutput() == null) return n;
+
+        AssistantMessage am = gen.getOutput();
+        n.put("role", "assistant");
+        n.put("content", am.getContent() == null ? "" : am.getContent());
+
+        if (am.hasToolCalls()) {
+            ArrayNode tcs = n.putArray("tool_calls");
+            for (AssistantMessage.ToolCall tc : am.getToolCalls()) {
+                ObjectNode t = tcs.addObject();
+                t.put("id", tc.id());
+                t.put("type", tc.type());
+                ObjectNode fn = t.putObject("function");
+                fn.put("name", tc.name());
+                fn.put("arguments", tc.arguments());
+            }
+        }
+        return n;
+    }
+
+
+
 }

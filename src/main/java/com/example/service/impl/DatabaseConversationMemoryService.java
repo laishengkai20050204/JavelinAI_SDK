@@ -2,7 +2,7 @@ package com.example.service.impl;
 
 import com.example.service.ConversationMemoryService;
 import com.example.service.impl.entity.ConversationMessageEntity;
-import com.example.service.impl.mapper.ConversationMemoryMapper;
+import com.example.mapper.ConversationMemoryMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;

@@ -1,7 +1,7 @@
 package com.example.service.impl;
 
 import com.example.service.impl.entity.ConversationMessageEntity;
-import com.example.service.impl.mapper.ConversationMemoryMapper;
+import com.example.mapper.ConversationMemoryMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
