@@ -2,6 +2,7 @@ package com.example.ai;
 
 import com.example.config.AiProperties;
 import com.example.ai.tools.SpringAiToolAdapter;
+import com.example.service.impl.StepContextStore;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,6 +46,7 @@ public class SpringAiChatGateway {
     private final SpringAiToolAdapter toolAdapter;
     private final ObjectMapper mapper;
     private final AiProperties properties;
+    private final StepContextStore stepStore; // 新增
 
     public Mono<String> call(Map<String, Object> payload, AiProperties.Mode mode) {
         return Mono.fromCallable(() -> executeCall(payload, mode))

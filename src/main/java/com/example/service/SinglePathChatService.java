@@ -6,6 +6,8 @@ import com.example.api.dto.StepState;
 import com.example.api.dto.StepTransition;
 import com.example.api.dto.ToolCall;
 import com.example.api.dto.ToolResult;
+import com.example.config.AiProperties;
+import com.example.service.impl.StepContextStore;
 import com.example.util.Fingerprint;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -25,8 +27,11 @@ public class SinglePathChatService {
     private final DecisionService decisionService;
     private final ToolExecutionPipeline toolPipeline;
     private final ContinuationService continuationService;
+    private final ConversationMemoryService memoryService;
+    private final AiProperties aiProperties;
     private final Guardrails guardrails;
     private final ObjectMapper objectMapper;
+    private final StepContextStore stepStore;
 
     public Flux<StepEvent> run(ChatRequest req) {
         return Flux.create(sink -> {
@@ -49,6 +54,18 @@ public class SinglePathChatService {
             return;
         }
         if (st.finished() || guardrails.reachedMaxLoops(st)) {
+            var req = st.req();
+            if (req != null) {
+                // 本轮所有 DRAFT（user/tool/assistant）一次性转 FINAL
+                try {
+                    if (aiProperties != null && aiProperties.getMemory() != null && aiProperties.getMemory().isPromoteDraftsOnFinish()) {
+                        memoryService.promoteDraftsToFinal(req.userId(), req.conversationId(), st.stepId());
+                    }
+                } catch (Exception e) {
+                    org.slf4j.LoggerFactory.getLogger(getClass())
+                            .warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
+                }
+            }
             sink.next(StepEvent.finished(st.stepId(), st.loop()));
             sink.complete();
             return;
@@ -87,6 +104,10 @@ public class SinglePathChatService {
                     return decisionService.decide(st, ctx)
                             .flatMap(decision -> {
                                 List<ToolCall> allCalls = decision.tools();
+
+                                if (allCalls != null && !allCalls.isEmpty()) {
+                                    stepStore.savePlannedCalls(st.stepId(), allCalls);
+                                }
 
                                 // 4.1 没有工具建议：复用草稿；否则续写
                                 if (allCalls.isEmpty()) {
@@ -192,7 +213,22 @@ public class SinglePathChatService {
                         concurrency, 1)
                 .collectList()
                 .flatMap(results ->
-                        continuationService.appendToolResultsToMemory(st.stepId(), results).thenReturn(results)
+                        continuationService.appendToolResultsToMemory(st.stepId(), results)
+                                // ★ 立刻转正：user / tool（以及之前已有的 assistant 草稿）都会变成 FINAL
+                                .then(Mono.fromRunnable(() -> {
+                                    var r = st.req();
+                                    if (r != null) {
+                                        try {
+                                            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
+                                        } catch (Exception e) {
+                                            org.slf4j.LoggerFactory.getLogger(getClass())
+                                                    .warn("[memory] promoteDraftsToFinal (on tools) failed: stepId={}, err={}", st.stepId(), e.toString());
+                                        }
+                                    }
+                                }))
+                                // ★ 暂存工具结果，供“下一次 AI-REQ”拼到 messages（见第三步）
+                                .then(Mono.fromRunnable(() -> stepStore.saveToolResults(st.stepId(), results)))
+                                .thenReturn(results)
                 )
                 .map(results -> {
                     // 收集已执行键
