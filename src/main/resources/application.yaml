@@ -72,4 +72,4 @@ logging:
     com.example: DEBUG
 
 mybatis:
-  mapper-locations: classpath*:com/example/service/impl/mapper/*.xml
+  mapper-locations: classpath*:com/example/mapper/*.xml

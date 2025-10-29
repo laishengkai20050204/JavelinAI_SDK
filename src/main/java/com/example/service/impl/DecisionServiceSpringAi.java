@@ -7,6 +7,7 @@ import com.example.service.DecisionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -15,6 +16,7 @@ import reactor.core.publisher.Mono;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @Primary
 @RequiredArgsConstructor
@@ -68,35 +70,47 @@ public class DecisionServiceSpringAi implements DecisionService {
                         JsonNode dbgReq = root.path("_provider_request");
                         JsonNode dbgRaw = root.path("_provider_raw");
                         JsonNode dbgAsst = root.path("_provider_assistant");
-                        if ((dbgReq != null && !dbgReq.isMissingNode()) ||
-                                (dbgRaw != null && !dbgRaw.isMissingNode()) ||
-                                (dbgAsst != null && !dbgAsst.isMissingNode())) {
+                        if ((dbgReq != null && !dbgReq.isMissingNode())
+                                || (dbgRaw != null && !dbgRaw.isMissingNode())
+                                || (dbgAsst != null && !dbgAsst.isMissingNode())) {
                             try {
                                 if (dbgReq != null && !dbgReq.isMissingNode()) {
-                                    // 日志别太吵，适度截断
                                     String s = truncate(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(dbgReq), 4000);
-                                    org.slf4j.LoggerFactory.getLogger(getClass()).debug("[DECIDE:PROVIDER:_request] {}", s);
+                                    log.trace("[DECIDE:PROVIDER:_request] {}", s);
                                 }
                                 if (dbgRaw != null && !dbgRaw.isMissingNode()) {
                                     String s = truncate(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(dbgRaw), 4000);
-                                    org.slf4j.LoggerFactory.getLogger(getClass()).debug("[DECIDE:PROVIDER:_raw] {}", s);
+                                    log.trace("[DECIDE:PROVIDER:_raw] {}", s);
                                 }
                                 if (dbgAsst != null && !dbgAsst.isMissingNode()) {
                                     String s = truncate(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(dbgAsst), 4000);
-                                    org.slf4j.LoggerFactory.getLogger(getClass()).debug("[DECIDE:PROVIDER:_assistant] {}", s);
+                                    log.trace("[DECIDE:PROVIDER:_assistant] {}", s);
                                 }
                             } catch (Exception ignore) {}
                         }
 
                         // 3.2 解析 tool_calls：优先 choices[0].message.tool_calls，缺失则回退到 _provider_assistant.tool_calls
                         List<ToolCall> calls = parseToolCallsWithFallback(root, clientToolNames(st));
-                        return calls.isEmpty() ? ModelDecision.empty() : new ModelDecision(calls);
+
+                        // 3.3 额外解析“决策阶段文本草稿”（无工具时就地复用，避免二次调用）
+                        String draft = extractAssistantDraft(root); // 见下方方法
+
+                        return new ModelDecision(calls, (draft != null && !draft.isBlank()) ? draft : null);
 
                     } catch (Exception e) {
                         return ModelDecision.empty();
                     }
                 });
+
     }
+
+    private String extractAssistantDraft(JsonNode root) {
+        String c1 = root.path("choices").path(0).path("message").path("content").asText("");
+        if (org.springframework.util.StringUtils.hasText(c1)) return c1;
+        String c2 = root.path("_provider_assistant").path("content").asText("");
+        return org.springframework.util.StringUtils.hasText(c2) ? c2 : null;
+    }
+
 
     /** 先从 choices[0].message.tool_calls 取；没有则回退到 _provider_assistant.tool_calls */
     private List<ToolCall> parseToolCallsWithFallback(JsonNode root, Set<String> clientNames) {

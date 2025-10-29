@@ -21,7 +21,7 @@ public class DecisionServiceImpl implements DecisionService {
         String q = st.req().q() == null ? "" : st.req().q();
         if (q.contains("调用hello_ai")) {
             ToolCall c = ToolCall.of("call_" + st.loop(), "hello_ai", Map.of("echo", q), "SERVER");
-            return Mono.just(new ModelDecision(List.of(c)));
+            return Mono.just(new ModelDecision(List.of(c), null));
         }
         // 否则不调用工具
         return Mono.just(ModelDecision.empty());

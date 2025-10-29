@@ -18,16 +18,28 @@
     </resultMap>
 
     <sql id="baseColumns">
-        id, user_id, conversation_id, role, content, payload, message_timestamp, state, step_id, seq, created_at
+        <trim suffixOverrides=",">
+            id,
+            user_id,
+            conversation_id,
+            role,
+            content,
+            payload,
+            message_timestamp,
+            state,
+            step_id,
+            seq,
+            created_at
+        </trim>
     </sql>
 
     <select id="selectHistory" resultMap="ConversationMessageMap">
         SELECT <include refid="baseColumns"/>
         FROM conversation_messages
         WHERE user_id = #{userId}
-          AND conversation_id = #{conversationId}
-          AND state = 'FINAL'
-        ORDER BY created_at ASC
+        AND conversation_id = #{conversationId}
+        AND state = 'FINAL'
+        ORDER BY created_at , seq , id
     </select>
 
     <delete id="deleteConversation">
@@ -40,12 +52,16 @@
         SELECT <include refid="baseColumns"/>
         FROM conversation_messages
         WHERE user_id = #{userId}
-          AND conversation_id = #{conversationId}
-          AND content LIKE CONCAT('%', #{query}, '%')
-          AND state = 'FINAL'
-        ORDER BY created_at DESC
+        AND conversation_id = #{conversationId}
+        AND state = 'FINAL'
+        AND (
+        content LIKE CONCAT('%', #{query}, '%')
+        OR JSON_SEARCH(payload, 'one', CONCAT('%', #{query}, '%')) IS NOT NULL
+        )
+        ORDER BY created_at DESC, id DESC
         LIMIT #{limit}
     </select>
+
 
     <select id="selectLatest" resultMap="ConversationMessageMap">
         SELECT <include refid="baseColumns"/>
@@ -53,7 +69,7 @@
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
           AND state = 'FINAL'
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT #{limit}
     </select>
 
@@ -66,19 +82,21 @@
          #{stepId}, #{seq}, #{state}, NOW())
         ON DUPLICATE KEY UPDATE
         content = VALUES(content),
-        payload = VALUES(payload)
+        payload = VALUES(payload),
+        message_timestamp = VALUES(message_timestamp)
     </insert>
 
     <select id="selectContext" resultType="map">
         SELECT id, user_id, conversation_id, role, content, payload, message_timestamp,
-               step_id, seq, state, created_at
+        step_id, seq, state, created_at
         FROM conversation_messages
         WHERE user_id = #{userId}
-          AND conversation_id = #{conversationId}
-          AND state IN ('DRAFT','FINAL')
-        ORDER BY created_at ASC
+        AND conversation_id = #{conversationId}
+        AND state = 'FINAL'                 <!-- 只给 FINAL -->
+        ORDER BY created_at ASC, seq ASC, id ASC
         LIMIT #{limit}
     </select>
+
 
     <update id="promoteDraftsToFinal">
         UPDATE conversation_messages
@@ -100,14 +118,11 @@
         FROM conversation_messages
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
-          AND role = 'assistant'
-          AND state IN ('DRAFT','FINAL')
-          AND payload IS NOT NULL
-          AND payload LIKE CONCAT('%"tool_calls"%')
-          AND payload LIKE CONCAT('%"id":"', #{toolCallId}, '"%')
-        ORDER BY created_at DESC
+          AND JSON_SEARCH(payload, 'one', #{toolCallId}, NULL, '$**.tool_call_id') IS NOT NULL
+        ORDER BY created_at DESC, id DESC
         LIMIT 1
     </select>
+
 
     <!-- 取某 stepId 的最大 seq，用于多轮在同一 step 里顺延序号 -->
     <select id="selectMaxSeq" resultType="int">
