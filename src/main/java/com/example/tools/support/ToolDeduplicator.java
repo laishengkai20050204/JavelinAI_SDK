@@ -5,12 +5,14 @@ import com.example.mapper.model.ToolExecutionRecord;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ToolDeduplicator {
@@ -26,8 +28,11 @@ public class ToolDeduplicator {
 
     /** 命中返回 result_json（字符串），否则 Optional.empty() */
     public Optional<String> tryReuse(String userId, String convId, String toolName, String argsHash) {
-        return db.findValidSuccess(userId, convId, toolName, argsHash)
+        log.debug("[MAP-LOOKUP] user={} conv={} tool={} hash={}", userId, convId, toolName, argsHash);
+        Optional<String> out = db.findValidSuccess(userId, convId, toolName, argsHash)
                 .map(ToolExecutionRecord::getResultJson);
+        log.debug("[MAP-LOOKUP-RET] hit={}", out.isPresent());
+        return out;
     }
 
     /** 成功后入账（带 TTL） */
@@ -42,6 +47,11 @@ public class ToolDeduplicator {
         rec.setArgsJson(args == null ? null : args.toString());
         rec.setResultJson(result == null ? null : result.toString());
         if (ttlSeconds > 0) rec.setExpiresAt(LocalDateTime.now().plusSeconds(ttlSeconds));
+        log.debug("[MAP-SAVE-IN] user={} conv={} tool={} hash={} ttl={}", userId, convId, toolName, argsHash, ttlSeconds);
         db.upsertSuccess(rec);
+        db.upsertSuccess(rec);
+        log.debug("Persisted tool success: user={} conv={} tool={} ttl={}s",
+                        userId, convId, toolName, ttlSeconds);
+
     }
 }

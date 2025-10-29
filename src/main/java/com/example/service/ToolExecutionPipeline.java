@@ -10,6 +10,7 @@ public interface ToolExecutionPipeline {
 
     /** 真正执行一次工具调用 */
     Mono<ToolExecResult> execute(ToolCall call);
+    Mono<ToolExecResult> execute(ToolCall call, String userId, String conversationId);
 
     /** 把执行结果按指纹记录下来，便于后续重用 */
     Mono<Void> record(String stepId, String toolName, String fingerprint, ToolExecResult res);

@@ -6,6 +6,7 @@ import com.example.service.ConversationMemoryService;
 import com.example.service.ContinuationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -14,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ContinuationServiceImpl implements ContinuationService {
@@ -43,10 +45,20 @@ public class ContinuationServiceImpl implements ContinuationService {
                 payload.put("data", r.data());
 
                 String payloadJson = toJson(payload);
-                memoryService.upsertMessage(userId, conversationId,
+                memoryService.upsertMessage(
+                        userId, conversationId,
                         "tool", content, payloadJson,
-                        stepId, seq++, "DRAFT"); // 先落草稿
+                        stepId, seq++, "DRAFT" // 先落草稿
+                );
             }
+
+            // ✅ 新增：把本轮工具结果放进 StepContextStore，供下一次请求拼回 messages
+            stepStore.saveToolResults(stepId, results);
+            log.debug("[STEP] toolResults saved: stepId={} total={}", stepId, results.size());
+
+            // 如需“工具成功后立即转正”，可在此处解开下一行
+            // memoryService.promoteDraftsToFinal(userId, conversationId, stepId);
+
         } catch (Exception ignore) {}
         return Mono.empty();
     }

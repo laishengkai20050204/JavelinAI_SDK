@@ -48,6 +48,13 @@ public class ToolExecutionPipelineImpl implements ToolExecutionPipeline {
 
     @Override
     public Mono<ToolExecResult> execute(ToolCall call) {
+        return execute(call, null, null);
+    }
+
+
+
+    @Override
+    public Mono<ToolExecResult> execute(ToolCall call, String userId, String conversationId) {
         return Mono.fromCallable(() -> {
             // ---- 兜底空参 ----
             Map<String, Object> args = call.arguments() == null
@@ -57,13 +64,20 @@ public class ToolExecutionPipelineImpl implements ToolExecutionPipeline {
             String argumentsJson = mapper.writeValueAsString(args);
             var execCall = new AiToolExecutor.ToolCall(call.id(), call.name(), argumentsJson);
 
+            // ★ 关键：把会话ID注入 fallbackArgs（优先于模型参数）
             Map<String, Object> fallbackArgs = new LinkedHashMap<>();
-            Object u = args.get("userId");
-            Object c = args.get("conversationId");
-            if (u != null) fallbackArgs.put("userId", u);
-            if (c != null) fallbackArgs.put("conversationId", c);
+            if (userId != null && !userId.isBlank()) {
+                fallbackArgs.put("userId", userId);
+            }
+            if (conversationId != null && !conversationId.isBlank()) {
+                fallbackArgs.put("conversationId", conversationId);
+            }
+            // 若模型参数里已经带了，也无妨，AiToolExecutor 里有 PROTECTED_SCOPE_KEYS 覆盖逻辑
+            // 仅用于排查：打印一下
+            log.debug("[TOOL-PIPE] fallbackArgs={}", fallbackArgs);
 
-            List<Map<String, Object>> toolMsgs = aiToolExecutor.executeAll(List.of(execCall), fallbackArgs);
+            List<Map<String, Object>> toolMsgs =
+                    aiToolExecutor.executeAll(List.of(execCall), fallbackArgs);
 
             Object data = java.util.Collections.emptyMap();
             if (!toolMsgs.isEmpty()) {
@@ -77,9 +91,8 @@ public class ToolExecutionPipelineImpl implements ToolExecutionPipeline {
                     data = content;
                 }
             }
-
             return new ToolExecResult(false, data);
-        }).subscribeOn(Schedulers.boundedElastic()); // <--- 关键：避免阻塞事件循环
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override

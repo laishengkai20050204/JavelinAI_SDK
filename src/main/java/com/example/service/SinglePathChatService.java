@@ -11,6 +11,7 @@ import com.example.service.impl.StepContextStore;
 import com.example.util.Fingerprint;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.*;
 
@@ -19,6 +20,7 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SinglePathChatService {
@@ -103,9 +105,10 @@ public class SinglePathChatService {
                     // 4) 模型决策
                     return decisionService.decide(st, ctx)
                             .flatMap(decision -> {
-                                List<ToolCall> allCalls = decision.tools();
+                                List<ToolCall> allCalls = decision.tools() == null ? List.of() : decision.tools();
 
-                                if (allCalls != null && !allCalls.isEmpty()) {
+                                // 存计划（给网关拼 assistant/tool 用）
+                                if (!allCalls.isEmpty()) {
                                     stepStore.savePlannedCalls(st.stepId(), allCalls);
                                 }
 
@@ -114,6 +117,7 @@ public class SinglePathChatService {
                                     String draft = decision.assistantDraft();
                                     if (org.springframework.util.StringUtils.hasText(draft)) {
                                         Map<String, Object> payload = new LinkedHashMap<>();
+                                        payload.put("stepId", st.stepId());
                                         payload.put("type", "assistant");
                                         payload.put("text", draft);
                                         return continuationService.appendAssistantToMemory(st.stepId(), draft)
@@ -122,13 +126,13 @@ public class SinglePathChatService {
                                     return continueAnswer(withHash, ctx);
                                 }
 
-                                // 4.2 拆分目标
+                                // 4.2 拆分目标（注意作用域：在同一层里声明并使用）
                                 List<ToolCall> serverCalls = allCalls.stream()
                                         .filter(tc -> "SERVER".equalsIgnoreCase(tc.execTarget()))
-                                        .toList();
+                                        .collect(Collectors.toList());
                                 List<ToolCall> clientCalls = allCalls.stream()
                                         .filter(tc -> "CLIENT".equalsIgnoreCase(tc.execTarget()))
-                                        .toList();
+                                        .collect(Collectors.toList());
 
                                 // 决策事件（便于前端展示）
                                 StepEvent decisionEvent = decisionEvent(allCalls);
@@ -144,7 +148,6 @@ public class SinglePathChatService {
 
                                 // 4.3 有 SERVER 调用
                                 if (!serverCalls.isEmpty()) {
-                                    // 事件集合
                                     List<StepEvent> events = new ArrayList<>();
                                     events.add(decisionEvent);
                                     events.addAll(extraEvents);
@@ -153,7 +156,7 @@ public class SinglePathChatService {
                                     List<ToolCall> pending = serverCalls.stream()
                                             .filter(tc -> {
                                                 String k = tc.name() + "::" + tc.stableArgs(objectMapper);
-                                                return !st.executedKeys().contains(k); // 已执行过则过滤掉
+                                                return !st.executedKeys().contains(k);
                                             })
                                             .collect(Collectors.collectingAndThen(
                                                     Collectors.toMap(
@@ -166,27 +169,25 @@ public class SinglePathChatService {
                                             ));
 
                                     if (!pending.isEmpty()) {
-                                        // 放入 pending，进入下一轮 execPending
                                         StepState next = withHash.withPending(pending);
                                         return Mono.just(StepTransition.of(next, events));
                                     } else {
-                                        // 所有 SERVER 工具都被去重过滤（已执行过）→ 不再空转
+                                        // 全部被去重 → 看是否有草稿，否则续写一次
                                         String draft = decision.assistantDraft();
                                         if (org.springframework.util.StringUtils.hasText(draft)) {
                                             Map<String, Object> payload = new LinkedHashMap<>();
+                                            payload.put("stepId", st.stepId());
                                             payload.put("type", "assistant");
                                             payload.put("text", draft);
                                             events.add(StepEvent.step(payload));
                                             return continuationService.appendAssistantToMemory(st.stepId(), draft)
                                                     .thenReturn(StepTransition.of(withHash.finish(), events));
                                         } else {
-                                            // 决策无草稿 → 续写一次生成最终回答
-                                            return continueAnswer(withHash, ctx)
-                                                    .map(tr -> {
-                                                        List<StepEvent> merged = new ArrayList<>(events);
-                                                        merged.addAll(tr.events());
-                                                        return StepTransition.of(tr.nextState(), merged);
-                                                    });
+                                            return continueAnswer(withHash, ctx).map(tr -> {
+                                                List<StepEvent> merged = new ArrayList<>(events);
+                                                merged.addAll(tr.events());
+                                                return StepTransition.of(tr.nextState(), merged);
+                                            });
                                         }
                                     }
                                 }
@@ -197,6 +198,7 @@ public class SinglePathChatService {
                                 events.addAll(extraEvents);
                                 return Mono.just(StepTransition.of(withHash.finish(), events));
                             });
+
                 });
     }
 
@@ -243,20 +245,42 @@ public class SinglePathChatService {
     }
 
     private Mono<ToolResult> execOneToolWithIdempotency(StepState st, ToolCall call) {
-        String argsStable = call.stableArgs(objectMapper);
+        // ★ 注入 userId / conversationId，确保 AiToolExecutor 能持久化与复用
+        final ToolCall callCtx = withContextIds(st, call); // ★ 不要改形参，另起 final 变量
+        final String argsStable = callCtx.stableArgs(objectMapper);
+        final String executedKey = callCtx.name() + "::" + argsStable;
         String fp = Fingerprint.sha256(call.name() + "|" + argsStable + "|" + safe(st.contextHash()));
-        String executedKey = call.name() + "::" + argsStable;
+
+        var req = st.req(); // 你已有
+        String uid = (req == null ? null : req.userId());
+        String cid = (req == null ? null : req.conversationId());
 
         return toolPipeline.tryReuse(st.stepId(), call.name(), fp)
                 .switchIfEmpty(
-                        toolPipeline.execute(call)
-                                .flatMap(res -> toolPipeline.record(st.stepId(), call.name(), fp, res).thenReturn(res))
+                        toolPipeline.execute(call, uid, cid)
+                                .flatMap(res -> toolPipeline.record(st.stepId(), callCtx.name(), fp, res).thenReturn(res))
                 )
                 .map(res -> ToolResult.success(
-                        call.id(), call.name(), res.reused(),
+                        callCtx.id(), callCtx.name(), res.reused(),
                         Map.of("payload", res.data(), "_executedKey", executedKey) // ← 附带去重键
                 ));
     }
+
+    private ToolCall withContextIds(com.example.api.dto.StepState st,
+                                                        com.example.api.dto.ToolCall call) {
+        var req = st.req();
+        if (req == null) {
+            return call;
+        }
+        Map<String, Object> args = new java.util.LinkedHashMap<>(
+                call.arguments() == null ? java.util.Collections.emptyMap() : call.arguments()
+        );
+        // 仅当缺失时补齐，避免用户显式传入被覆盖
+        args.putIfAbsent("userId", req.userId());
+        args.putIfAbsent("conversationId", req.conversationId());
+        return com.example.api.dto.ToolCall.of(call.id(), call.name(), args, call.execTarget());
+    }
+
 
 
     private Mono<StepTransition> continueAnswer(StepState st, AssembledContext ctx) {

@@ -1,8 +1,10 @@
 package com.example.api.dto;
 
 import java.util.List;
+import java.util.Map;
 
 public record AssembledContext(
-        List<ChatMessage> messages, // 简化：这步先不接数据库
-        String hash
+        List<ChatMessage> messages,
+        String hash,
+        List<Map<String, Object>> structuredToolMessages // 新增：OpenAI 规范的消息块
 ) {}

@@ -108,15 +108,54 @@ public class SpringAiChatGateway {
         }
 
         List<Map<String, Object>> messageMaps = convertMessagesObject(messagesObj);
-        List<Message> messages = messageMaps.stream()
-                .map(this::mapToMessage)
-                .filter(Objects::nonNull)
-                .toList();
+        // 注意：要可变
+        List<Message> messages = new ArrayList<>(
+                messageMaps.stream().map(this::mapToMessage).filter(Objects::nonNull).toList()
+        );
+
+        // ===== 新增：把本 step 的 “assistant: tool_calls（计划）” 和 “tool（结果）” 拼进 messages =====
+        String stepId = asString(payload.get("stepId")); // 请保证上游把 stepId 放进 payload
+        if (org.springframework.util.StringUtils.hasText(stepId)) {
+            // 2.1 追加一条 assistant（带 tool_calls）
+            var planned = stepStore.drainPlannedCalls(stepId); // 由 SinglePath/Decision 阶段保存
+            if (planned != null && !planned.isEmpty()) {
+                List<AssistantMessage.ToolCall> toolCalls = new ArrayList<>();
+                for (var c : planned) {
+                    // c 是 com.example.api.dto.ToolCall
+                    toolCalls.add(new AssistantMessage.ToolCall(
+                            c.id(),
+                            "function",
+                            c.name(),
+                            c.stableArgs(mapper) // 已是 JSON 字符串
+                    ));
+                }
+                messages.add(new AssistantMessage("", Map.of(), toolCalls));
+            }
+
+            // 2.2 追加多条 tool（带 tool_call_id）
+            var results = stepStore.drainToolResults(stepId); // 由 execPending 保存
+            if (results != null && !results.isEmpty()) {
+                for (var r : results) {
+                    String content = readableFromToolResult(r.data());
+                    ToolResponseMessage.ToolResponse resp = new ToolResponseMessage.ToolResponse(
+                            r.callId(),      // 必须：让模型对得上哪一个调用
+                            r.name() != null ? r.name() : "",
+                            content != null ? content : ""
+                    );
+                    messages.add(new ToolResponseMessage(List.of(resp)));
+                }
+            }
+            log.debug("[AI-REQ:EXTRA] stepId={} plannedCalls={} toolResults={} totalMessages={}",
+                    stepId,
+                    planned == null ? 0 : planned.size(),
+                    results == null ? 0 : results.size(),
+                    messages.size());
+        }
+
+        // ===== 新增结束 =====
 
         FunctionCallingOptions options = buildOptions(payload, mode);
-        Prompt prompt = new Prompt(messages, options);
-
-        return prompt;
+        return new Prompt(messages, options);
     }
 
     // 将即将发送给模型的请求以“OpenAI风格”JSON预览形式打印到日志（DEBUG级）
@@ -763,6 +802,40 @@ public class SpringAiChatGateway {
             }
         }
         return n;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String readableFromToolResult(Object data) {
+        if (data == null) return "";
+        if (data instanceof String s) return s;
+        if (data instanceof Map<?, ?> m) {
+            // 优先取 data.payload.value
+            Object payload = m.get("payload");
+            if (payload instanceof Map<?, ?> pm) {
+                Object v = pm.get("value");
+                if (v instanceof String sv && !sv.isBlank()) return sv;
+            }
+            // 退化：常见键位
+            for (String k : List.of("value","text","content","message","delta")) {
+                Object v = m.get(k);
+                if (v instanceof String sv && !sv.isBlank()) return sv;
+            }
+            // 最后兜底：序列化成 JSON
+            try { return mapper.writeValueAsString(m); } catch (Exception ignore) {}
+            return String.valueOf(m);
+        }
+        if (data instanceof Iterable<?> it) {
+            StringBuilder sb = new StringBuilder();
+            for (Object x : it) {
+                String part = readableFromToolResult(x);
+                if (part != null && !part.isBlank()) {
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(part);
+                }
+            }
+            return sb.toString();
+        }
+        return String.valueOf(data);
     }
 
 

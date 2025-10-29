@@ -57,6 +57,7 @@ public class DecisionServiceSpringAi implements DecisionService {
         }
         payload.put("userId", st.req().userId());
         payload.put("conversationId", st.req().conversationId());
+        payload.put("stepId", st.stepId());
 
         AiProperties.Mode mode = props.getMode();
 

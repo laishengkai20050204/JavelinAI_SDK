@@ -77,24 +77,92 @@ public class ContextAssemblerImpl implements ContextAssembler {
                         : java.util.List.of();
 
         // 4) 转成 ChatMessage（role + content）
+        // 4) 转成 ChatMessage（role + content） + 提取工具行为结构化工具消息
         List<ChatMessage> msgs = new ArrayList<>(rows.size());
+        List<Map<String, Object>> structured = new ArrayList<>(); // ★ 新增
+
         for (Map<String, Object> r : rows) {
             Object role = r.get("role");
             Object content = r.get("content");
             String roleStr = role == null ? "user" : String.valueOf(role);
             String text = content instanceof String s ? s : (content == null ? "" : String.valueOf(content));
+
+            if ("tool".equalsIgnoreCase(roleStr)) {
+                // ★ 把工具行重放为：assistant(tool_calls) + tool 两条结构化消息
+                String payloadJson = null;
+                Object payload = r.get("payload");
+                try {
+                    if (payload instanceof String ps) {
+                        payloadJson = ps;
+                    } else if (payload != null) {
+                        payloadJson = objectMapper.writeValueAsString(payload);
+                    }
+                } catch (Exception ignore) {}
+
+                String toolName = null, toolCallId = null, argsStr = "{}";
+                if (payloadJson != null && !payloadJson.isBlank()) {
+                    try {
+                        var root = objectMapper.readTree(payloadJson);
+                        toolName = root.path("name").asText(null);
+                        toolCallId = root.path("tool_call_id").asText(null);
+
+                        // 尝试从 _executedKey 提取“稳定参数”作为 arguments（形如 name::{"userId":"u1","conversationId":"c3"}）
+                        String executedKey = root.path("data").path("_executedKey").asText(null);
+                        if (executedKey != null) {
+                            int idx = executedKey.indexOf("::");
+                            if (idx >= 0 && idx + 2 < executedKey.length()) {
+                                String maybeJson = executedKey.substring(idx + 2);
+                                try {
+                                    // 校验一下 JSON 合法性
+                                    objectMapper.readTree(maybeJson);
+                                    argsStr = maybeJson;
+                                } catch (Exception ignore) {}
+                            }
+                        }
+                    } catch (Exception ignore) {}
+                }
+                if (toolCallId == null) {
+                    // 没拿到 id 也能工作：给个稳定但不冲突的 id（不影响模型语义）
+                    toolCallId = "call_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+                }
+                if (toolName == null) {
+                    toolName = "unknown_tool";
+                }
+
+                // assistant(tool_calls) 消息
+                Map<String, Object> assistantWithToolCall = Map.of(
+                        "role", "assistant",
+                        "content", "",
+                        "tool_calls", List.of(Map.of(
+                                "id", toolCallId,
+                                "type", "function",
+                                "function", Map.of(
+                                        "name", toolName,
+                                        "arguments", argsStr // 必须是字符串
+                                )
+                        ))
+                );
+                // tool 消息（content 必须是字符串；你已把工具结果的纯文本存入了 content 列）
+                Map<String, Object> toolMsg = Map.of(
+                        "role", "tool",
+                        "tool_call_id", toolCallId,
+                        "name", toolName,
+                        "content", text
+                );
+
+                structured.add(assistantWithToolCall);
+                structured.add(toolMsg);
+                // 注意：工具行**不要**再加入 msgs，避免“扁平文本 + 结构化重复”
+                continue;
+            }
+
+            // 非工具行照旧
             msgs.add(new ChatMessage(roleStr, text));
         }
 
-        // 5) 上下文哈希（日志/观测）
-        String base;
-        try {
-            base = objectMapper.writeValueAsString(rows);
-        } catch (Exception e) {
-            base = st.req() != null && st.req().q() != null ? st.req().q().trim() : "";
-        }
-        String hash = Fingerprint.sha256(base);
+        // 5) 上下文哈希（日志/观测）不变 ...
 
-        return Mono.just(new AssembledContext(msgs, hash));
+        return Mono.just(new AssembledContext(msgs, hash, structured)); // ★ 带上 structured
+
     }
 }

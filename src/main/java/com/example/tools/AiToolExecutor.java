@@ -92,21 +92,37 @@ public class AiToolExecutor {
                 ttlSeconds = n.intValue();
             }
 
+            // ★【哨兵1】四个关键条件
+            log.debug("[DEDUP-CHECK] tool={} enabled={} force={} userId={} convId={} ttl={}",
+                    tool.name(), dedupProps.isEnabled(), force, userId, conversationId, ttlSeconds);
+
             String contentJsonToReturn;
 
             // 3) 若启用去重，且具备 userId/convId 且不是 force，则尝试复用
             if (dedupProps.isEnabled() && !force && userId != null && conversationId != null) {
+
                 // 3.1 计算参数指纹（忽略 timestamp/requestId/nonce 等抖动字段）
                 Set<String> ignore = new HashSet<>(dedupProps.getIgnoreArgs());
-                JsonNode canonicalArgs = JsonCanonicalizer.normalize(mapper, mapper.valueToTree(args), ignore);
+                JsonNode rawArgsNode = mapper.valueToTree(args);
+                JsonNode canonicalArgs = JsonCanonicalizer.normalize(mapper, rawArgsNode, ignore);
                 String argsHash = dedup.fingerprint(tool.name(), canonicalArgs);
+
+                // ★【哨兵2】入参与归一化
+                log.debug("[DEDUP-ARGS] tool={} ignore={} raw={} canon={} hash={}",
+                        tool.name(), ignore, rawArgsNode, canonicalArgs, argsHash);
+
+                // ★【哨兵3a】开始查复用
+                log.debug("[DEDUP-LOOKUP] tool={} user={} conv={} hash={}",
+                        tool.name(), userId, conversationId, argsHash);
 
                 // 3.2 账本命中直接复用
                 Optional<String> cached = dedup.tryReuse(userId, conversationId, tool.name(), argsHash);
                 if (cached.isPresent()) {
                     contentJsonToReturn = cached.get();
-                    log.debug("REUSED tool='{}' id={} fp={} user={} conv={} ttl={}s",
-                            tool.name(), call.id(), argsHash.substring(0, 12), userId, conversationId, ttlSeconds);
+
+                    // ★【哨兵3b】命中复用
+                    log.debug("[DEDUP-HIT] tool={} hash={} reused=true",
+                            tool.name(), argsHash);
 
                     results.add(Map.of(
                             "role", "tool",
@@ -116,15 +132,29 @@ public class AiToolExecutor {
                     continue;
                 }
 
+                // ★【哨兵3c】未命中，准备执行并保存
+                log.debug("[DEDUP-MISS] tool={} hash={} -> execute", tool.name(), argsHash);
+
                 // 3.3 未命中 -> 执行并入账
                 ToolResult result;
                 try {
                     result = tool.execute(args);
                 } catch (Exception ex) {
-                    log.warn("Tool '{}' execution failed", tool.name(), ex);
+                    log.warn("[EXEC-ERR] tool={} ex={}: {}", tool.name(), ex.getClass().getSimpleName(), ex.getMessage(), ex);
                     throw ex;
                 }
                 contentJsonToReturn = result.contentJson();
+
+                // ★【哨兵4】执行成功（去重分支）
+                log.debug("[EXEC-OK] tool={} branch=dedup payloadLen={} sample={}",
+                        tool.name(),
+                        (contentJsonToReturn == null ? 0 : contentJsonToReturn.length()),
+                        contentJsonToReturn == null ? "null" : contentJsonToReturn.substring(0, Math.min(120, contentJsonToReturn.length())));
+
+                // ★【哨兵5a】即将保存（去重分支）
+                log.debug("[DEDUP-SAVE] tool={} user={} conv={} hash={} ttl={}",
+                        tool.name(), userId, conversationId, argsHash, ttlSeconds);
+
                 dedup.saveSuccess(userId, conversationId, tool.name(), argsHash,
                         mapper.valueToTree(args), mapper.readTree(Objects.requireNonNullElse(contentJsonToReturn, "null")),
                         ttlSeconds);
@@ -139,15 +169,45 @@ public class AiToolExecutor {
                 continue;
             }
 
-            // 4) 未启用去重 或 无 userId/convId 或 force=true -> 直接执行（不复用）
+            // 4) 未启用去重 或 无 userId/convId 或 force=true -> 直接执行
             ToolResult result;
             try {
                 result = tool.execute(args);
             } catch (Exception ex) {
-                log.warn("Tool '{}' execution failed", tool.name(), ex);
+                log.warn("[EXEC-ERR] tool={} ex={}: {}", tool.name(), ex.getClass().getSimpleName(), ex.getMessage(), ex);
                 throw ex;
             }
             contentJsonToReturn = result.contentJson();
+
+            // ★【哨兵4'】执行成功（非去重分支）
+            log.debug("[EXEC-OK] tool={} branch=no-dedup payloadLen={} sample={}",
+                    tool.name(),
+                    (contentJsonToReturn == null ? 0 : contentJsonToReturn.length()),
+                    contentJsonToReturn == null ? "null" : contentJsonToReturn.substring(0, Math.min(120, contentJsonToReturn.length())));
+
+            // 这里你已有“审计保存（no-dedup 分支）”，先别改逻辑；只在内部补两条日志更清晰：
+            if (userId != null && conversationId != null) {
+                try {
+                    Set<String> ignore = new HashSet<>(dedupProps.getIgnoreArgs());
+                    JsonNode canonicalArgs = JsonCanonicalizer.normalize(mapper, mapper.valueToTree(args), ignore);
+                    String argsHash = dedup.fingerprint(tool.name(), canonicalArgs);
+
+                    // ★【哨兵5a'】准备保存（非去重分支）
+                    log.debug("[AUDIT-SAVE] tool={} user={} conv={} hash={} ttl={}",
+                            tool.name(), userId, conversationId, argsHash, dedupProps.getDefaultTtlSeconds());
+
+                    dedup.saveSuccess(userId, conversationId, tool.name(), argsHash,
+                            mapper.valueToTree(args), mapper.readTree(Objects.requireNonNullElse(contentJsonToReturn, "null")),
+                            /*ttlSeconds*/ dedupProps.getDefaultTtlSeconds());
+
+                    log.debug("Tool '{}' call id={} persisted SUCCESS (no-dedup branch)", tool.name(), call.id());
+                } catch (Exception e) {
+                    log.warn("[AUDIT-ERROR] tool={} err={}", tool.name(), e.toString(), e);
+                }
+            } else {
+                // ★【哨兵5b'】为什么没保存（缺 ids）
+                log.debug("[AUDIT-SKIP] tool={} reason=missing ids userId={} convId={}", tool.name(), userId, conversationId);
+            }
 
             results.add(Map.of(
                     "role", "tool",
@@ -161,4 +221,5 @@ public class AiToolExecutor {
         log.debug("Completed execution of {} tool call(s)", results.size());
         return results;
     }
+
 }
