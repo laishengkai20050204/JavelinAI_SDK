@@ -47,7 +47,6 @@ public class ToolDeduplicator {
         rec.setArgsJson(args == null ? null : args.toString());
         rec.setResultJson(result == null ? null : result.toString());
         if (ttlSeconds > 0) rec.setExpiresAt(LocalDateTime.now().plusSeconds(ttlSeconds));
-        log.debug("[MAP-SAVE-IN] user={} conv={} tool={} hash={} ttl={}", userId, convId, toolName, argsHash, ttlSeconds);
         db.upsertSuccess(rec);
         db.upsertSuccess(rec);
         log.debug("Persisted tool success: user={} conv={} tool={} ttl={}s",

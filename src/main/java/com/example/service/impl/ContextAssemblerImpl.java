@@ -160,9 +160,22 @@ public class ContextAssemblerImpl implements ContextAssembler {
             msgs.add(new ChatMessage(roleStr, text));
         }
 
-        // 5) 上下文哈希（日志/观测）不变 ...
+        // 5) 上下文哈希（用于日志/观测）——建议包含 rows + structured，保证可复现
+        String base;
+        try {
+            // 把用于回灌的结构（structured）也纳入哈希更稳妥
+            Map<String, Object> toHash = Map.of(
+                    "rows", rows,
+                    "structured", structured
+            );
+            base = objectMapper.writeValueAsString(toHash);
+        } catch (Exception e) {
+            base = (st.req() != null && st.req().q() != null) ? st.req().q().trim() : "";
+        }
+        String hash = Fingerprint.sha256(base);
 
-        return Mono.just(new AssembledContext(msgs, hash, structured)); // ★ 带上 structured
+        // 6) 返回（带上 structured）
+        return Mono.just(new AssembledContext(msgs, hash, structured));
 
     }
 }

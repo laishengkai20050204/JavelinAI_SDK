@@ -3,7 +3,10 @@ package com.example.service.impl;
 import com.example.ai.SpringAiChatGateway;
 import com.example.api.dto.*;
 import com.example.config.AiProperties;
+import com.example.service.ConversationMemoryService;
 import com.example.service.DecisionService;
+import com.example.tools.support.JsonCanonicalizer;
+import com.example.util.Fingerprint;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +17,7 @@ import org.springframework.util.StringUtils;
 import reactor.core.publisher.Mono;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -25,6 +29,8 @@ public class DecisionServiceSpringAi implements DecisionService {
     private final SpringAiChatGateway gateway;
     private final AiProperties props;
     private final ObjectMapper mapper;
+    private final ConversationMemoryService memoryService;
+    private final Map<String, Set<String>> decisionSeen = new ConcurrentHashMap<>();
 
     @Override
     public Mono<ModelDecision> decide(StepState st, AssembledContext ctx) {
@@ -95,6 +101,29 @@ public class DecisionServiceSpringAi implements DecisionService {
 
                         // 3.3 额外解析“决策阶段文本草稿”（无工具时就地复用，避免二次调用）
                         String draft = extractAssistantDraft(root); // 见下方方法
+
+                        if (!calls.isEmpty()
+                                && st != null && st.req() != null
+                                && org.springframework.util.StringUtils.hasText(st.req().userId())
+                                && org.springframework.util.StringUtils.hasText(st.req().conversationId())) {
+
+                            String fp = fingerprintToolCalls(calls);
+
+                            // 同一 step 内：不同决策（不同指纹）会多次写入；相同决策跳过
+                            if (markDecisionOnce(st.stepId(), fp)) {
+                                persistAssistantDecisionDraft(
+                                        memoryService,
+                                        mapper,
+                                        st.req().userId(),
+                                        st.req().conversationId(),
+                                        st.stepId(),
+                                        calls
+                                );
+                                log.debug("[memory] decision draft persisted (new) step={} fp={}", st.stepId(), fp.substring(0, 12));
+                            } else {
+                                log.debug("[memory] decision draft skipped (duplicate) step={} fp={}", st.stepId(), fp.substring(0, 12));
+                            }
+                        }
 
                         return new ModelDecision(calls, (draft != null && !draft.isBlank()) ? draft : null);
 
@@ -194,4 +223,85 @@ public class DecisionServiceSpringAi implements DecisionService {
         try { return mapper.readValue(json, Map.class); }
         catch (Exception ignore) { return Map.of(); }
     }
+
+    private void persistAssistantDecisionDraft(
+            ConversationMemoryService memoryService,
+            ObjectMapper objectMapper,
+            String userId,
+            String conversationId,
+            String stepId,
+            List<com.example.api.dto.ToolCall> calls
+    ) {
+        try {
+            Integer max = memoryService.findMaxSeq(userId, conversationId, stepId);
+            int seq = (max == null ? 0 : max) + 1;
+
+            // 统一保存成 OpenAI 风格结构，后续回灌最稳
+            List<Map<String, Object>> tcPayload = new ArrayList<>();
+            for (var c : calls) {
+                tcPayload.add(Map.of(
+                        "id",        c.id(),
+                        "type",      "function",
+                        "function",  Map.of(
+                                "name", c.name(),
+                                // 这里一定是字符串；若你有 stableArgs(mapper) 可直接用
+                                "arguments", c.stableArgs(objectMapper)
+                        )
+                ));
+            }
+
+            Map<String, Object> payload = Map.of(
+                    "source",     "model",
+                    "type",       "assistant_decision",
+                    "tool_calls", tcPayload,
+                    "stepId",     stepId
+            );
+
+            memoryService.upsertMessage(
+                    userId,
+                    conversationId,
+                    "assistant",                 // ← 决策来自 assistant
+                    "",                          // content 为空（只存决策结构）
+                    objectMapper.writeValueAsString(payload),
+                    stepId,
+                    seq,
+                    "DRAFT"                      // 本轮结束再 promote
+            );
+
+            log.debug("[memory] decision draft persisted: user={} conv={} step={} tcs={}",
+                    userId, conversationId, stepId, tcPayload.size());
+        } catch (Exception e) {
+            log.warn("[memory] persist assistant decision failed: user={} conv={} step={} err={}",
+                    userId, conversationId, stepId, e.toString());
+        }
+    }
+
+    private boolean markDecisionOnce(String stepId, String decisionFp) {
+        return decisionSeen
+                .computeIfAbsent(stepId, k -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+                .add(decisionFp);
+    }
+
+    private String fingerprintToolCalls(java.util.List<ToolCall> calls) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        for (ToolCall c : calls) {
+            String argsStr = c.stableArgs(mapper); // 你的 ToolCall 已有稳定参数方法
+            try {
+                // 规范化，忽略抖动字段（按你去重账本的习惯）
+                var canon = JsonCanonicalizer.normalize(
+                        mapper,
+                        mapper.readTree(argsStr),
+                        java.util.Set.of("nonce","timestamp","requestId")
+                ).toString();
+                parts.add(c.name() + "::" + canon);
+            } catch (Exception e) {
+                // 兜底：解析失败也别中断
+                parts.add(c.name() + "::" + String.valueOf(argsStr));
+            }
+        }
+        java.util.Collections.sort(parts);
+        return Fingerprint.sha256(String.join("|", parts));
+    }
+
+
 }

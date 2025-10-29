@@ -103,60 +103,63 @@ public class SpringAiChatGateway {
 
     private Prompt toPrompt(Map<String, Object> payload, AiProperties.Mode mode) {
         Object messagesObj = payload.get("messages");
-        if (messagesObj == null) {
-            throw new IllegalArgumentException("messages is required");
-        }
+        if (messagesObj == null) throw new IllegalArgumentException("messages is required");
 
         List<Map<String, Object>> messageMaps = convertMessagesObject(messagesObj);
-        // 注意：要可变
         List<Message> messages = new ArrayList<>(
                 messageMaps.stream().map(this::mapToMessage).filter(Objects::nonNull).toList()
         );
 
-        // ===== 新增：把本 step 的 “assistant: tool_calls（计划）” 和 “tool（结果）” 拼进 messages =====
-        String stepId = asString(payload.get("stepId")); // 请保证上游把 stepId 放进 payload
+        // ★ NEW: 把 ContextAssembler 给的结构化工具消息插进来
+        Object structuredObj = payload.get("structuredToolMessages");
+        if (structuredObj == null) {
+            // 兼容字段名 'structured'
+            structuredObj = payload.get("structured");
+        }
+        if (structuredObj != null) {
+            List<Map<String, Object>> structuredMaps = convertMessagesObject(structuredObj);
+            List<Message> structuredMsgs = structuredMaps.stream()
+                    .map(this::mapToMessage).filter(Objects::nonNull).toList();
+
+            // 插入位置：最后一条 user 之前（通常那条就是“本轮提问”）
+            int insertAt = indexBeforeLastUser(messages);
+            if (insertAt < 0) insertAt = messages.size();
+            messages.addAll(insertAt, structuredMsgs);
+            log.debug("[AI-REQ:STRUCTURED] inserted={} atIndex={}", structuredMsgs.size(), insertAt);
+        }
+
+        // === 你原来基于 stepId 的 plannedCalls / toolResults 追加，保留不动 ===
+        String stepId = asString(payload.get("stepId"));
         if (org.springframework.util.StringUtils.hasText(stepId)) {
-            // 2.1 追加一条 assistant（带 tool_calls）
-            var planned = stepStore.drainPlannedCalls(stepId); // 由 SinglePath/Decision 阶段保存
+            var planned = stepStore.drainPlannedCalls(stepId);
             if (planned != null && !planned.isEmpty()) {
-                List<AssistantMessage.ToolCall> toolCalls = new ArrayList<>();
+                List<AssistantMessage.ToolCall> tcs = new ArrayList<>();
                 for (var c : planned) {
-                    // c 是 com.example.api.dto.ToolCall
-                    toolCalls.add(new AssistantMessage.ToolCall(
-                            c.id(),
-                            "function",
-                            c.name(),
-                            c.stableArgs(mapper) // 已是 JSON 字符串
+                    tcs.add(new AssistantMessage.ToolCall(
+                            c.id(), "function", c.name(), c.stableArgs(mapper)
                     ));
                 }
-                messages.add(new AssistantMessage("", Map.of(), toolCalls));
+                messages.add(new AssistantMessage("", Map.of(), tcs));
             }
-
-            // 2.2 追加多条 tool（带 tool_call_id）
-            var results = stepStore.drainToolResults(stepId); // 由 execPending 保存
+            var results = stepStore.drainToolResults(stepId);
             if (results != null && !results.isEmpty()) {
                 for (var r : results) {
                     String content = readableFromToolResult(r.data());
                     ToolResponseMessage.ToolResponse resp = new ToolResponseMessage.ToolResponse(
-                            r.callId(),      // 必须：让模型对得上哪一个调用
-                            r.name() != null ? r.name() : "",
-                            content != null ? content : ""
+                            r.callId(), (r.name() == null ? "" : r.name()), (content == null ? "" : content)
                     );
                     messages.add(new ToolResponseMessage(List.of(resp)));
                 }
             }
             log.debug("[AI-REQ:EXTRA] stepId={} plannedCalls={} toolResults={} totalMessages={}",
-                    stepId,
-                    planned == null ? 0 : planned.size(),
-                    results == null ? 0 : results.size(),
-                    messages.size());
+                    stepId, planned == null ? 0 : planned.size(),
+                    results == null ? 0 : results.size(), messages.size());
         }
-
-        // ===== 新增结束 =====
 
         FunctionCallingOptions options = buildOptions(payload, mode);
         return new Prompt(messages, options);
     }
+
 
     // 将即将发送给模型的请求以“OpenAI风格”JSON预览形式打印到日志（DEBUG级）
     private ObjectNode logOutgoingPayloadJson(
@@ -837,6 +840,17 @@ public class SpringAiChatGateway {
         }
         return String.valueOf(data);
     }
+
+    private int indexBeforeLastUser(List<Message> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            Message m = messages.get(i);
+            if (m instanceof UserMessage) {
+                return i; // 把 structured 插到这条 user 之前
+            }
+        }
+        return -1; // 没有 user，就追加到末尾
+    }
+
 
 
 
