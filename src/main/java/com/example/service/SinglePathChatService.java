@@ -56,18 +56,6 @@ public class SinglePathChatService {
             return;
         }
         if (st.finished() || guardrails.reachedMaxLoops(st)) {
-            var req = st.req();
-            if (req != null) {
-                // 本轮所有 DRAFT（user/tool/assistant）一次性转 FINAL
-                try {
-                    if (aiProperties != null && aiProperties.getMemory() != null && aiProperties.getMemory().isPromoteDraftsOnFinish()) {
-                        memoryService.promoteDraftsToFinal(req.userId(), req.conversationId(), st.stepId());
-                    }
-                } catch (Exception e) {
-                    org.slf4j.LoggerFactory.getLogger(getClass())
-                            .warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
-                }
-            }
             sink.next(StepEvent.finished(st.stepId(), st.loop()));
             sink.complete();
             return;

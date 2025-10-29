@@ -13,10 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -65,71 +62,59 @@ public class ContextAssemblerImpl implements ContextAssembler {
             }
         }
 
-        // 3) 读取上下文（只读 FINAL；由你的 mapper 决定，确保 selectContext 仅取 FINAL）
-        int limit = 12; // 默认值
+// 3) 读取上下文（只读 FINAL）
+        int limit = 12;
         if (aiProperties != null && aiProperties.getMemory() != null) {
             limit = Math.max(1, aiProperties.getMemory().getMaxMessages());
         }
 
-        java.util.List<java.util.Map<String, Object>> rows =
+        List<Map<String, Object>> rows =
                 (userId != null && conversationId != null)
                         ? memoryService.getContext(userId, conversationId, limit)
-                        : java.util.List.of();
+                        : List.of();
 
-        // 4) 转成 ChatMessage（role + content）
-        // 4) 转成 ChatMessage（role + content） + 提取工具行为结构化工具消息
+// 4) 转成 ChatMessage（role+content） + 同时提取“结构化的工具消息”
         List<ChatMessage> msgs = new ArrayList<>(rows.size());
-        List<Map<String, Object>> structured = new ArrayList<>(); // ★ 新增
+        List<Map<String, Object>> structured = new ArrayList<>();
 
         for (Map<String, Object> r : rows) {
-            Object role = r.get("role");
+            String roleStr = String.valueOf(r.getOrDefault("role", "user"));
             Object content = r.get("content");
-            String roleStr = role == null ? "user" : String.valueOf(role);
-            String text = content instanceof String s ? s : (content == null ? "" : String.valueOf(content));
+            String text = (content instanceof String s) ? s : (content == null ? "" : String.valueOf(content));
 
             if ("tool".equalsIgnoreCase(roleStr)) {
-                // ★ 把工具行重放为：assistant(tool_calls) + tool 两条结构化消息
-                String payloadJson = null;
-                Object payload = r.get("payload");
-                try {
-                    if (payload instanceof String ps) {
-                        payloadJson = ps;
-                    } else if (payload != null) {
-                        payloadJson = objectMapper.writeValueAsString(payload);
-                    }
-                } catch (Exception ignore) {}
-
+                // 从 payload 里还原 tool_calls + tool
+                String payloadJson = toJsonString(r.get("payload"));
                 String toolName = null, toolCallId = null, argsStr = "{}";
+
                 if (payloadJson != null && !payloadJson.isBlank()) {
                     try {
                         var root = objectMapper.readTree(payloadJson);
-                        toolName = root.path("name").asText(null);
-                        toolCallId = root.path("tool_call_id").asText(null);
+                        toolName = nullTo(root.path("name").asText(null), null);
+                        toolCallId = nullTo(root.path("tool_call_id").asText(null), null);
 
-                        // 尝试从 _executedKey 提取“稳定参数”作为 arguments（形如 name::{"userId":"u1","conversationId":"c3"}）
+                        // 尝试从 data._executedKey 里提取稳定参数
                         String executedKey = root.path("data").path("_executedKey").asText(null);
                         if (executedKey != null) {
                             int idx = executedKey.indexOf("::");
                             if (idx >= 0 && idx + 2 < executedKey.length()) {
                                 String maybeJson = executedKey.substring(idx + 2);
                                 try {
-                                    // 校验一下 JSON 合法性
-                                    objectMapper.readTree(maybeJson);
-                                    argsStr = maybeJson;
-                                } catch (Exception ignore) {}
+                                    objectMapper.readTree(maybeJson); // 校验
+                                    argsStr = maybeJson;              // ★ OpenAI 风格要求字符串
+                                } catch (Exception ignore) { /* fallback keep "{}" */ }
                             }
                         }
-                    } catch (Exception ignore) {}
+                    } catch (Exception ignore) { /* 没 payload 也能工作 */ }
                 }
+
                 if (toolCallId == null) {
-                    // 没拿到 id 也能工作：给个稳定但不冲突的 id（不影响模型语义）
-                    toolCallId = "call_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+                    toolCallId = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
                 }
                 if (toolName == null) {
                     toolName = "unknown_tool";
                 }
 
-                // assistant(tool_calls) 消息
                 Map<String, Object> assistantWithToolCall = Map.of(
                         "role", "assistant",
                         "content", "",
@@ -138,44 +123,54 @@ public class ContextAssemblerImpl implements ContextAssembler {
                                 "type", "function",
                                 "function", Map.of(
                                         "name", toolName,
-                                        "arguments", argsStr // 必须是字符串
+                                        "arguments", argsStr // 必须是“字符串”
                                 )
                         ))
                 );
-                // tool 消息（content 必须是字符串；你已把工具结果的纯文本存入了 content 列）
+
                 Map<String, Object> toolMsg = Map.of(
                         "role", "tool",
                         "tool_call_id", toolCallId,
                         "name", toolName,
-                        "content", text
+                        "content", text == null ? "" : text
                 );
 
                 structured.add(assistantWithToolCall);
                 structured.add(toolMsg);
-                // 注意：工具行**不要**再加入 msgs，避免“扁平文本 + 结构化重复”
+                // 工具行本身不要再加入 msgs，避免“扁平文本 + 结构化”重复
                 continue;
             }
 
-            // 非工具行照旧
+            // 非工具行照旧加入扁平文本消息
             msgs.add(new ChatMessage(roleStr, text));
         }
 
-        // 5) 上下文哈希（用于日志/观测）——建议包含 rows + structured，保证可复现
-        String base;
+// 5) 安全计算 hash（把 rows + structured 一起做指纹，避免 NPE）
+        String hash;
         try {
-            // 把用于回灌的结构（structured）也纳入哈希更稳妥
-            Map<String, Object> toHash = Map.of(
+            String base = objectMapper.writeValueAsString(Map.of(
                     "rows", rows,
                     "structured", structured
-            );
-            base = objectMapper.writeValueAsString(toHash);
+            ));
+            hash = Fingerprint.sha256(base);
         } catch (Exception e) {
-            base = (st.req() != null && st.req().q() != null) ? st.req().q().trim() : "";
+            hash = Fingerprint.sha256((rows == null ? 0 : rows.size()) + ":" + (structured == null ? 0 : structured.size()));
         }
-        String hash = Fingerprint.sha256(base);
 
-        // 6) 返回（带上 structured）
+        // 6) 返回（你的 AssembledContext 需要有第三个字段 structured）
         return Mono.just(new AssembledContext(msgs, hash, structured));
 
     }
+
+    private String toJsonString(Object payload) {
+        if (payload == null) return null;
+        if (payload instanceof String s) return s;
+        try { return objectMapper.writeValueAsString(payload); }
+        catch (Exception e) { return null; }
+    }
+
+    private static <T> T nullTo(T val, T fallback) {
+        return val != null ? val : fallback;
+    }
+
 }

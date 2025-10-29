@@ -48,7 +48,6 @@ public class ToolDeduplicator {
         rec.setResultJson(result == null ? null : result.toString());
         if (ttlSeconds > 0) rec.setExpiresAt(LocalDateTime.now().plusSeconds(ttlSeconds));
         db.upsertSuccess(rec);
-        db.upsertSuccess(rec);
         log.debug("Persisted tool success: user={} conv={} tool={} ttl={}s",
                         userId, convId, toolName, ttlSeconds);
 

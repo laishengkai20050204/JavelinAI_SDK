@@ -47,7 +47,9 @@ public class ContinuationServiceImpl implements ContinuationService {
                 String payloadJson = toJson(payload);
                 memoryService.upsertMessage(
                         userId, conversationId,
-                        "tool", content, payloadJson,
+                        "tool",
+                        content,
+                        payloadJson,
                         stepId, seq++, "DRAFT" // 先落草稿
                 );
             }
@@ -57,7 +59,7 @@ public class ContinuationServiceImpl implements ContinuationService {
             log.debug("[STEP] toolResults saved: stepId={} total={}", stepId, results.size());
 
             // 如需“工具成功后立即转正”，可在此处解开下一行
-            // memoryService.promoteDraftsToFinal(userId, conversationId, stepId);
+             memoryService.promoteDraftsToFinal(userId, conversationId, stepId);
 
         } catch (Exception ignore) {}
         return Mono.empty();

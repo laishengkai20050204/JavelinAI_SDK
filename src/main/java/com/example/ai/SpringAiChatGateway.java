@@ -110,6 +110,9 @@ public class SpringAiChatGateway {
                 messageMaps.stream().map(this::mapToMessage).filter(Objects::nonNull).toList()
         );
 
+        // --- 新增：若上游已扁平化，则跳过 structured 插入 ---
+        boolean flattened = "true".equalsIgnoreCase(String.valueOf(payload.get("_flattened")));
+
         // ★ NEW: 把 ContextAssembler 给的结构化工具消息插进来
         Object structuredObj = payload.get("structuredToolMessages");
         if (structuredObj == null) {
@@ -130,7 +133,7 @@ public class SpringAiChatGateway {
 
         // === 你原来基于 stepId 的 plannedCalls / toolResults 追加，保留不动 ===
         String stepId = asString(payload.get("stepId"));
-        if (org.springframework.util.StringUtils.hasText(stepId)) {
+/*        if (org.springframework.util.StringUtils.hasText(stepId)) {
             var planned = stepStore.drainPlannedCalls(stepId);
             if (planned != null && !planned.isEmpty()) {
                 List<AssistantMessage.ToolCall> tcs = new ArrayList<>();
@@ -154,7 +157,7 @@ public class SpringAiChatGateway {
             log.debug("[AI-REQ:EXTRA] stepId={} plannedCalls={} toolResults={} totalMessages={}",
                     stepId, planned == null ? 0 : planned.size(),
                     results == null ? 0 : results.size(), messages.size());
-        }
+        }*/
 
         FunctionCallingOptions options = buildOptions(payload, mode);
         return new Prompt(messages, options);
@@ -516,15 +519,38 @@ public class SpringAiChatGateway {
             return new AssistantMessage(text, metadata, toolCalls);
         }
         if ("tool".equalsIgnoreCase(role)) {
-            String id = asString(source.get("tool_call_id"));
+            String id   = asString(source.get("tool_call_id"));
             String name = asString(source.get("name"));
-            String data = normalizeContent(content);
-            ToolResponseMessage.ToolResponse response = new ToolResponseMessage.ToolResponse(
-                    id != null ? id : "tool-" + System.nanoTime(),
-                    name != null ? name : "",
-                    data != null ? data : ""
+
+            // 先拿 content 字段（按你的设计应是 DB 的 content 列）
+            String data = normalizeContent(source.get("content"));
+
+            // ★ 兜底：如果 content 为空，再从 payload/data.payload.value 等常见位置提取
+            if (!org.springframework.util.StringUtils.hasText(data)) {
+                Object payload = source.get("payload");               // 你存进 DB 的 payload（JSON）
+                if (payload instanceof Map<?,?> pm) {
+                    // 典型结构：{ data: { payload: { type:"text", value:"..." }, _executedKey: "..." }, ... }
+                    Object dataObj = pm.get("data");
+                    Map<?,?> dataMap = (dataObj instanceof Map<?,?> dm) ? dm : pm; // 有的直接是 payload
+                    Object inner = dataMap.get("payload");
+                    if (inner instanceof Map<?,?> im) {
+                        Object v = im.get("value");
+                        if (v instanceof String sv && org.springframework.util.StringUtils.hasText(sv)) {
+                            data = sv; // 成功提到 "debug from tool"
+                        } else {
+                            // 再兜一层：value 没有就把整个 payload 序列化成文本给模型看
+                            try { data = mapper.writeValueAsString(im); } catch (Exception ignore) {}
+                        }
+                    }
+                }
+            }
+
+            ToolResponseMessage.ToolResponse resp = new ToolResponseMessage.ToolResponse(
+                    (id != null ? id : "tool-" + System.nanoTime()),
+                    (name != null ? name : ""),
+                    (data != null ? data : "")
             );
-            return new ToolResponseMessage(List.of(response));
+            return new ToolResponseMessage(java.util.List.of(resp));
         }
         return new UserMessage(normalizeContent(content));
     }
