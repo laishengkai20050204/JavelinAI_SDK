@@ -133,18 +133,18 @@ public class ContextAssemblerImpl implements ContextAssembler {
             // 3.2 tool 行：若没出现过对应决策，就地补一条 assistant(tool_calls)，然后追加 tool
             if ("tool".equalsIgnoreCase(roleStr)) {
                 String toolName = null, toolCallId = null, argsStr = "{}";
+
                 if (payloadJson != null && !payloadJson.isBlank()) {
                     try {
                         var root = objectMapper.readTree(payloadJson);
                         toolName   = root.path("name").asText(null);
                         toolCallId = root.path("tool_call_id").asText(null);
 
-                        // 权威参数字符串（工具执行时落库）
+                        // 权威参数（优先 payload.args；兜底 data._executedKey）
                         String persistedArgs = root.path("args").asText(null);
                         if (persistedArgs != null && !persistedArgs.isBlank()) {
                             try { objectMapper.readTree(persistedArgs); argsStr = persistedArgs; } catch (Exception ignore) {}
                         }
-                        // 兜底：data._executedKey: name::{"..."}
                         if ("{}".equals(argsStr)) {
                             String ek = root.path("data").path("_executedKey").asText(null);
                             if (ek != null) {
@@ -160,7 +160,34 @@ public class ContextAssemblerImpl implements ContextAssembler {
                 if (toolCallId == null) toolCallId = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
                 if (toolName == null) toolName = "unknown_tool";
 
-                // 若没有出现过决策：补一条 assistant(tool_calls)（就地、在 tool 之前），避免“只有 tool”的非法序列
+                // ★★★ 关键：构造 tool.content（DB content 为空就从 payload 兜底）
+                String toolContent = (text == null) ? "" : text; // text = DB content
+                if ((toolContent == null || toolContent.isBlank()) && payloadJson != null && !payloadJson.isBlank()) {
+                    try {
+                        var root = objectMapper.readTree(payloadJson);
+                        // 1) data.payload.value
+                        String v1 = root.path("data").path("payload").path("value").asText("");
+                        // 2) data.payload（字符串）
+                        String v2 = root.path("data").path("payload").isTextual()
+                                ? root.path("data").path("payload").asText("") : "";
+                        // 3) data.result / result
+                        String v3 = root.path("data").path("result").asText("");
+                        String v4 = root.path("result").asText("");
+                        if (!v1.isBlank()) toolContent = v1;
+                        else if (!v2.isBlank()) toolContent = v2;
+                        else if (!v3.isBlank()) toolContent = v3;
+                        else if (!v4.isBlank()) toolContent = v4;
+                        else {
+                            // 4) 兜底：把 data.payload 整体序列化成字符串
+                            var dp = root.path("data").path("payload");
+                            if (!dp.isMissingNode() && !dp.isNull()) {
+                                toolContent = dp.isTextual() ? dp.asText() : objectMapper.writeValueAsString(dp);
+                            }
+                        }
+                    } catch (Exception ignore) {}
+                }
+
+                // 若没有出现过决策：补一条 assistant(tool_calls)
                 if (!seenDecisionIds.contains(toolCallId)) {
                     Map<String, Object> assistantWithToolCall = Map.of(
                             "role", "assistant",
@@ -176,15 +203,16 @@ public class ContextAssemblerImpl implements ContextAssembler {
                     seenDecisionIds.add(toolCallId);
                 }
 
-                // 追加 tool（严格按 DB 的位置）
+                // 追加 tool（用兜底后的 content）
                 Map<String, Object> toolMsg = Map.of(
                         "role", "tool",
                         "tool_call_id", toolCallId,
                         "name", toolName,
-                        "content", text == null ? "" : text
+                        "content", toolContent   // ★ 永远不是 null；优先 DB，失败再 payload 兜底
                 );
                 modelMessages.add(toolMsg);
                 structured.add(toolMsg);
+
                 continue;
             }
 
