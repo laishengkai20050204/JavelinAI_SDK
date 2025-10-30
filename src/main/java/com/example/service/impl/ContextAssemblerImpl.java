@@ -26,7 +26,6 @@ public class ContextAssemblerImpl implements ContextAssembler {
     private final ObjectMapper objectMapper;
     private final StepContextStore stepStore;
     private final AiProperties aiProperties;
-    private final Set<String> userFinalWritten = ConcurrentHashMap.newKeySet();
 
     @Override
     public Mono<AssembledContext> assemble(StepState st) {
@@ -37,25 +36,6 @@ public class ContextAssemblerImpl implements ContextAssembler {
         }
         final String userId = (st.req() != null) ? st.req().userId() : null;
         final String conversationId = (st.req() != null) ? st.req().conversationId() : null;
-        final String stepId = st.stepId();
-
-        // 1) 把“本轮用户问题”直接写 FINAL（你当前的选择），仅当 q 非空
-        String q = (st.req() != null) ? st.req().q() : null;
-        if (q != null && !q.isBlank() && userId != null && conversationId != null
-                && userFinalWritten.add(stepId)) {
-            try {
-                Integer max = memoryService.findMaxSeq(userId, conversationId, stepId);
-                int seq = (max == null ? 0 : max) + 1;
-                memoryService.upsertMessage(
-                        userId, conversationId,
-                        "user", q, null,
-                        stepId, seq, "FINAL"
-                );
-            } catch (Exception e) {
-                log.warn("[memory] persist user final failed: userId={} convId={} stepId={} err={}",
-                        userId, conversationId, stepId, e.toString());
-            }
-        }
 
         // 2) 读取上下文（只读 FINAL；条数从配置读取，默认 12）
         int limit = 12;
@@ -239,9 +219,6 @@ public class ContextAssemblerImpl implements ContextAssembler {
         return Mono.just(new AssembledContext(plainTexts, hash, structured, modelMessages));
     }
 
-    public void clearPerStepCaches(String stepId) {
-        userFinalWritten.remove(stepId);
-    }
 
     private String toJsonString(Object payload) {
         if (payload == null) return null;

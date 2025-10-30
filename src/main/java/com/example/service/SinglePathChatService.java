@@ -36,7 +36,7 @@ public class SinglePathChatService {
     private final StepContextStore stepStore;
     private final ClientResultIngestor clientResultIngestor;
     private final Set<String> userDraftSaved = ConcurrentHashMap.newKeySet();
-
+    private final Set<String> userFinalWritten = ConcurrentHashMap.newKeySet();
 
     public Flux<StepEvent> run(ChatRequest req) {
         return Flux.create(sink -> {
@@ -72,7 +72,7 @@ public class SinglePathChatService {
             sink.complete();
 
             // 最后清缓存、解绑
-            contextAssembler.clearPerStepCaches(st.stepId());
+
             // 若有：decisionService.clearStep(st.stepId());
             stepStore.clear(st.stepId());
             return;
@@ -97,6 +97,9 @@ public class SinglePathChatService {
             stepStore.bind(st.stepId(), st.req().userId(), st.req().conversationId());
         }
 
+        // === 0) 先落用户问句 → 立即转正 ===
+        Mono<Void> preUser = persistUserDraftIfAny(st);
+
         // === 0) 串行吸收客户端结果 ===
         Mono<Void> preIngest = Mono
                 .defer(() -> {
@@ -109,7 +112,9 @@ public class SinglePathChatService {
                     return Mono.empty();
                 });
 
-        return preIngest.then(Mono.defer(() -> {
+
+
+        return preUser.then(preIngest).then(Mono.defer(() -> {
             // 1) pending（只 SERVER）
             if (st.hasPendingServerTools()) {
                 return execPending(st);
@@ -365,10 +370,6 @@ public class SinglePathChatService {
     private Mono<Void> persistUserDraftIfAny(StepState st) {
         var r = st.req();
         if (r == null) return Mono.empty();
-
-        // 幂等：每个 step 只做一次
-        if (!userDraftSaved.add(st.stepId())) return Mono.empty();
-
         String q = (r.q() == null ? "" : r.q().trim());
         if (q.isEmpty()) return Mono.empty();
 
@@ -376,22 +377,17 @@ public class SinglePathChatService {
             String userId = r.userId();
             String convId = r.conversationId();
 
-            // 让 user 成为本 step 的第一条（在 clientResults 之前调用此方法即可）
-            int seq = Optional.ofNullable(
-                    memoryService.findMaxSeq(userId, convId, st.stepId())
-            ).orElse(0) + 1;
+            // 关键：user 固定写 seq=1，借助唯一键 + upsert 实现跨重启幂等
+            int seqUser = 1;
 
             memoryService.upsertMessage(
                     userId, convId,
                     "user", q, /* payload */ null,
-                    st.stepId(), seq, "DRAFT"
+                    st.stepId(), seqUser, "DRAFT"
             );
-
-            // 立刻转正，后续 ContextAssembler(select FINAL) 才能读到
             memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
 
-            log.debug("[user] drafted & promoted, step={}, seq={}, len={}",
-                    st.stepId(), seq, q.length());
+            log.debug("[user] drafted & promoted (seq=1), step={}, len={}", st.stepId(), q.length());
         });
     }
 

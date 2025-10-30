@@ -3,7 +3,6 @@ package com.example.util;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.*;
-import java.util.stream.Stream;
 
 @SuppressWarnings("unchecked")
 public final class ToolPayloads {
@@ -23,7 +22,7 @@ public final class ToolPayloads {
             }
         }
 
-        if (p instanceof Map<?, ?> map0) {
+        if (p instanceof Map<?, ?>) {
             Map<String, Object> m = toMap(p, om);
             // 常见：payload → 再向里钻
             if (m.containsKey("payload")) {
@@ -31,7 +30,7 @@ public final class ToolPayloads {
             }
             // 常见 value/text
             if (m.containsKey("value")) return m.get("value");
-            if (m.containsKey("text")) return m.get("text");
+            if (m.containsKey("text"))  return m.get("text");
             // 有些返回把结果放 result
             if (m.containsKey("result")) return unwrap(m.get("result"), om);
             // 没有更内层可钻，原样返回 Map
@@ -99,7 +98,7 @@ public final class ToolPayloads {
         return "{}";
     }
 
-    /** 递归挖纯文本：优先返回 value/text/content/message/delta；再钻 payload/result；列表则拼接；兜底 JSON */
+    /** 递归挖纯文本：优先返回 value/text/content/message/delta；再钻 payload/result；列表会智能渲染；兜底 JSON */
     public static String extractReadableText(Object data, ObjectMapper om) {
         return digReadable(data, om);
     }
@@ -110,28 +109,43 @@ public final class ToolPayloads {
         if (node == null) return "";
         if (node instanceof String s) return s;
 
-        if (node instanceof Map<?, ?> m0) {
+        if (node instanceof Map<?, ?>) {
             Map<String, Object> m = toMap(node, om);
+
+            // 优先尝试把 payload 是 List<Map> 的情况渲染为 “标题 — URL” 多行文本（典型：search_web）
+            Object payload = m.get("payload");
+            if (payload instanceof List<?> list && looksLikeSearchList(list)) {
+                return formatSearchList(list);
+            }
+
             // 直层候选键
             for (String k : new String[]{"value", "text", "content", "message", "delta"}) {
                 Object v = m.get(k);
                 if (v instanceof String sv && !sv.isBlank()) return sv;
             }
-            // 继续向里钻
+
+            // 继续向里钻（payload/result）
             for (String ck : new String[]{"payload", "result"}) {
                 if (m.containsKey(ck)) {
                     String inner = digReadable(m.get(ck), om);
                     if (!inner.isBlank()) return inner;
                 }
             }
+
             // 兜底：转 JSON 文本
             String j = toJson(m, om);
             return j != null ? j : String.valueOf(m);
         }
 
         if (node instanceof Iterable<?> it) {
+            List<?> list = toList(it);
+            // 如果整个节点本身就是搜索结果列表，也友好渲染
+            if (!list.isEmpty() && looksLikeSearchList(list)) {
+                return formatSearchList(list);
+            }
+            // 否则逐项拼接
             StringBuilder sb = new StringBuilder();
-            for (Object x : it) {
+            for (Object x : list) {
                 String part = digReadable(x, om);
                 if (!part.isBlank()) {
                     if (sb.length() > 0) sb.append('\n');
@@ -144,8 +158,52 @@ public final class ToolPayloads {
         return String.valueOf(node);
     }
 
+    /** 判定 List<?> 是否像 [{title, url, snippet?}, ...] 的搜索结果 */
+    private static boolean looksLikeSearchList(List<?> list) {
+        Object first = list.get(0);
+        if (!(first instanceof Map<?, ?> m)) return false;
+        boolean hasUrl   = m.containsKey("url");
+        boolean hasTitle = m.containsKey("title");
+        // 允许只有 url 或只有 title，也尽量渲染
+        return hasUrl || hasTitle;
+    }
+
+    /** 把搜索结果列表渲染成多行 “标题 — URL”（若无标题则仅 URL；可选追加 snippet） */
+    private static String formatSearchList(List<?> list) {
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (Object o : list) {
+            if (!(o instanceof Map<?, ?> m)) continue;
+            String title   = str(m.get("title"));
+            String url     = str(m.get("url"));
+            String snippet = str(m.get("snippet"));
+            if (title == null && url == null) continue;
+
+            if (sb.length() > 0) sb.append('\n');
+            if (title != null && !title.isBlank()) {
+                sb.append(title);
+                if (url != null && !url.isBlank()) sb.append(" — ").append(url);
+            } else {
+                sb.append(url);
+            }
+            // 选配：如果有 snippet，可以拼一小段（防止过长，这里不拼或你按需加）
+            // if (snippet != null && !snippet.isBlank()) sb.append("  · ").append(snippet);
+
+            if (++count >= 10) break; // 防止过长
+        }
+        return sb.toString();
+    }
+
+    private static List<?> toList(Iterable<?> it) {
+        List<Object> out = new ArrayList<>();
+        for (Object x : it) out.add(x);
+        return out;
+    }
+
     private static boolean isJson(ObjectMapper om, String s) {
         if (s == null || s.isBlank()) return false;
         try { om.readTree(s); return true; } catch (Exception e) { return false; }
     }
+
+    private static String str(Object o) { return o == null ? null : String.valueOf(o); }
 }
