@@ -1,0 +1,341 @@
+package com.example.tools.impl;
+
+import com.example.ai.tools.AiToolComponent;
+import com.example.api.dto.ToolResult;
+import com.example.config.WebFetchProperties;
+import com.example.tools.AiTool;
+import com.example.tools.support.JsonCanonicalizer;
+import com.example.util.Fingerprint;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
+import org.springframework.util.StringUtils;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Mono;
+
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.*;
+
+/**
+ * web_fetch：抓取 URL 并抽取可读正文，控制长度回灌模型
+ *
+ * 参数：
+ *  - url (string, 必填)
+ *  - max_chars (int, 默认 props.defaultMaxChars)
+ *  - selector (string, 可选；如启用 jsoup 则按 CSS 选择器抽取，否则忽略)
+ */
+@Slf4j
+@AiToolComponent
+@RequiredArgsConstructor
+public class WebFetchTool implements AiTool {
+
+    private final ObjectMapper mapper;
+    private final WebClient.Builder webClientBuilder;
+    private final WebFetchProperties props;
+
+    private WebClient webClient;
+    private boolean jsoupAvailable;
+
+    @PostConstruct
+    public void init() {
+        this.jsoupAvailable = classPresent("org.jsoup.Jsoup");
+
+        // 独立的 WebClient，限制单次内存
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(props.getMaxInMemoryBytes()))
+                .build();
+
+        this.webClient = webClientBuilder
+                .clone()
+                .exchangeStrategies(strategies)
+                .defaultHeader("User-Agent", props.getUserAgent())
+                .build();
+
+        log.info("[web_fetch] jsoupAvailable={}, timeout={}, maxInMemoryBytes={}",
+                jsoupAvailable, props.getTimeout(), props.getMaxInMemoryBytes());
+    }
+
+    @Override public String name() { return "web_fetch"; }
+
+    @Override
+    public String description() {
+        return "Fetch a web page and extract readable text (title + excerpt) for analysis.";
+    }
+
+    @Override
+    public Map<String, Object> parametersSchema() {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        Map<String, Object> ps = new LinkedHashMap<>();
+        ps.put("url", Map.of("type","string","minLength",1,"description","Absolute HTTP(S) URL"));
+        ps.put("max_chars", Map.of("type","integer","minimum",200,"maximum",20000,"default",props.getDefaultMaxChars()));
+        ps.put("selector", Map.of("type","string","description","Optional CSS selector (jsoup if available)"));
+        schema.put("properties", ps);
+        schema.put("required", List.of("url"));
+        return schema;
+    }
+
+    @Override
+    public ToolResult execute(Map<String, Object> args) {
+        try {
+            String rawUrl = str(args.get("url"));
+            if (!StringUtils.hasText(rawUrl)) {
+                return ToolResult.error(null, name(), "Missing required parameter: url");
+            }
+
+            int maxChars = intOr(args.get("max_chars"), props.getDefaultMaxChars());
+            maxChars = Math.max(200, Math.min(20000, maxChars));
+            String selector = str(args.get("selector"));
+
+            // === 1) 规范化 URL + 基础校验/SSRF 防护 ===
+            URI uri = normalizeUrl(rawUrl);
+            if (!isAllowedScheme(uri)) {
+                return ToolResult.error(null, name(), "Only http/https are allowed.");
+            }
+            if (props.isSsrfGuardEnabled() && isPrivateAddress(uri)) {
+                return ToolResult.error(null, name(), "Target host resolves to a private/loopback address.");
+            }
+
+            // 指纹（仅用规范化 URL）
+            Map<String,Object> fp = Map.of("url", uri.toString());
+            JsonNode canonNode = JsonCanonicalizer.normalize(mapper, mapper.valueToTree(fp), java.util.Set.of());
+            String canonical = mapper.writeValueAsString(canonNode);
+            String executedKey = name() + "::" + Fingerprint.sha256(canonical);
+
+            // === 2) 发起请求 ===
+            Duration timeout = props.getTimeout();
+
+            Body body = webClient.get()
+                    .uri(uri)
+                    .accept(MediaType.TEXT_HTML, MediaType.APPLICATION_XHTML_XML, MediaType.APPLICATION_XML, MediaType.ALL)
+                    .exchangeToMono(resp -> resp.bodyToMono(byte[].class)
+                            .defaultIfEmpty(new byte[0])
+                            .map(bytes -> new Body(
+                                    resp.headers().contentType().orElse(MediaType.TEXT_PLAIN),
+                                    new String(bytes, StandardCharsets.UTF_8),
+                                    resp.statusCode().value() // <-- 替代 rawStatusCode()
+                            )))
+                    .timeout(timeout)
+                    .onErrorResume(WebClientResponseException.class, ex ->
+                            Mono.just(new Body(
+                                    ex.getHeaders().getContentType(),
+                                    Optional.ofNullable(ex.getResponseBodyAsString()).orElse(""),
+                                    ex.getStatusCode().value() // <-- 替代 getRawStatusCode()
+                            )))
+                    .blockOptional()
+                    .orElse(new Body(MediaType.TEXT_PLAIN, "", 0));
+
+            if (body.status() >= 400) { // <-- 访问器方法
+                String msg = "HTTP " + body.status() + " " +
+                        Optional.ofNullable(body.contentType()).orElse(MediaType.TEXT_PLAIN);
+                return ToolResult.error(null, name(), msg);
+            }
+
+            // === 3) 抽取标题与正文 ===
+            Extracted ex = jsoupAvailable
+                    ? extractWithJsoup(body.text(), uri.toString(), selector, maxChars) // <-- 访问器方法
+                    : extractLight(body.text(), maxChars);
+
+
+            Map<String,Object> payload = new LinkedHashMap<>();
+            payload.put("url", uri.toString());
+            payload.put("title", Optional.ofNullable(ex.title).orElse(""));
+            payload.put("excerpt", Optional.ofNullable(ex.excerpt).orElse(""));
+            payload.put("fetchedAt", java.time.OffsetDateTime.now().toString());
+            payload.put("source", "server");
+            if (jsoupAvailable) payload.put("_parser", "jsoup"); else payload.put("_parser", "light");
+
+            Map<String,Object> data = new LinkedHashMap<>();
+            data.put("payload", payload);
+            data.put("_executedKey", executedKey);
+
+            return ToolResult.success(null, name(), false, data);
+
+        } catch (Exception e) {
+            log.warn("[web_fetch] exception", e);
+            return ToolResult.error(null, name(), e.getMessage());
+        }
+    }
+
+    // ======= 抽取实现 =======
+
+    private Extracted extractWithJsoup(String html, String baseUrl, String selector, int maxChars) {
+        try {
+            Class<?> jsoup = Class.forName("org.jsoup.Jsoup");
+            Object doc = jsoup.getMethod("parse", String.class, String.class).invoke(null, html, baseUrl);
+
+            // title
+            String title = (String) doc.getClass().getMethod("title").invoke(doc);
+
+            String text;
+            if (StringUtils.hasText(selector)) {
+                Object elements = doc.getClass().getMethod("select", String.class).invoke(doc, selector);
+                text = (String) elements.getClass().getMethod("text").invoke(elements);
+            } else {
+                // 常见正文区域优先
+                Object el = doc.getClass().getMethod("select", String.class)
+                        .invoke(doc, "article, main, #content, .content, #main, .post, .article");
+                String t = (String) el.getClass().getMethod("text").invoke(el);
+                if (!StringUtils.hasText(t)) {
+                    Object body = doc.getClass().getMethod("body").invoke(doc);
+                    t = (String) body.getClass().getMethod("text").invoke(body);
+                }
+                text = t;
+            }
+            return new Extracted(title, truncate(compact(text), maxChars));
+        } catch (Throwable ignore) {
+            // 兜底
+            return extractLight(html, maxChars);
+        }
+    }
+
+    /** 无依赖抽取（去 <script>/<style>，去标签，压缩空白） */
+    private Extracted extractLight(String html, int maxChars) {
+        String title = findBetween(html, "<title>", "</title>");
+        String cleaned = html
+                .replaceAll("(?is)<script.*?>.*?</script>", " ")
+                .replaceAll("(?is)<style.*?>.*?</style>", " ")
+                .replaceAll("(?is)<!--.*?-->", " ")
+                .replaceAll("(?is)<(head|noscript|svg|canvas|form|footer|nav|aside)[\\s\\S]*?</\\1>", " ");
+        String text = cleaned.replaceAll("(?is)<[^>]+>", " ");
+        text = htmlUnescape(text);
+        text = compact(text);
+        return new Extracted(safe(title), truncate(text, maxChars));
+    }
+
+    // ======= URL/SSRF 工具 =======
+
+    private URI normalizeUrl(String raw) throws URISyntaxException {
+        URI u = new URI(raw.trim());
+        // 去掉 fragment
+        String fragmentless = new URI(
+                u.getScheme(), u.getUserInfo(), u.getHost(), u.getPort(), u.getPath(), u.getQuery(), null
+        ).toString();
+        // 去常见 utm 参数
+        try {
+            var qp = splitQuery(new URI(fragmentless));
+            qp.keySet().removeIf(k -> k.toLowerCase().startsWith("utm_"));
+            String query = qp.isEmpty() ? null : toQuery(qp);
+            return new URI(u.getScheme(), u.getUserInfo(), u.getHost(), u.getPort(), u.getPath(), query, null);
+        } catch (Exception ignore) {
+            return new URI(fragmentless);
+        }
+    }
+
+    private boolean isAllowedScheme(URI u) {
+        String s = Optional.ofNullable(u.getScheme()).orElse("").toLowerCase();
+        for (String ok : props.getAllowedSchemes()) if (ok.equals(s)) return true;
+        return false;
+    }
+
+    private boolean isPrivateAddress(URI u) {
+        try {
+            String host = u.getHost();
+            if (host == null) return true;
+            // IP 字面量
+            if (host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+") || host.contains(":")) {
+                InetAddress ia = InetAddress.getByName(host);
+                return isBad(ia);
+            }
+            // 域名解析
+            InetAddress[] arr = InetAddress.getAllByName(host);
+            for (InetAddress ia : arr) if (isBad(ia)) return true;
+            return false;
+        } catch (Exception e) {
+            return true; // 解析失败视为不安全
+        }
+    }
+
+    private boolean isBad(InetAddress ia) {
+        return ia.isLoopbackAddress()
+                || ia.isAnyLocalAddress()
+                || ia.isLinkLocalAddress()
+                || ia.isSiteLocalAddress()
+                || ia.isMulticastAddress();
+    }
+
+    // ======= 小工具 =======
+
+    private static String str(Object o) { return o == null ? null : String.valueOf(o); }
+    private static int intOr(Object o, int d) { try { return o==null?d:Integer.parseInt(String.valueOf(o)); } catch (Exception e){ return d; } }
+
+    private static String truncate(String s, int n) {
+        if (s == null) return null;
+        return s.length() <= n ? s : s.substring(0, n);
+    }
+
+    private static String compact(String s) {
+        if (s == null) return null;
+        return s.replaceAll("[ \\t\\x0B\\f\\r]+", " ")
+                .replaceAll("(?m)^\\s+|\\s+$", "")
+                .replaceAll("\\n{3,}", "\n\n")
+                .trim();
+    }
+
+    private static String safe(String s) { return s == null ? "" : s.trim(); }
+
+    private static String findBetween(String src, String a, String b) {
+        try {
+            String low = src.toLowerCase();
+            int i = low.indexOf(a.toLowerCase());
+            if (i < 0) return null;
+            int j = low.indexOf(b.toLowerCase(), i + a.length());
+            if (j < 0) return null;
+            return src.substring(i + a.length(), j);
+        } catch (Exception e) { return null; }
+    }
+
+    private static Map<String, List<String>> splitQuery(URI uri) {
+        Map<String, List<String>> queryPairs = new LinkedHashMap<>();
+        String query = uri.getQuery();
+        if (query == null) return queryPairs;
+        for (String pair : query.split("&")) {
+            int idx = pair.indexOf("=");
+            String key = idx > 0 ? decode(pair.substring(0, idx)) : decode(pair);
+            String value = idx > 0 && pair.length() > idx + 1 ? decode(pair.substring(idx + 1)) : "";
+            queryPairs.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+        }
+        return queryPairs;
+    }
+
+    private static String toQuery(Map<String, List<String>> qp) {
+        List<String> parts = new ArrayList<>();
+        for (var e : qp.entrySet()) {
+            for (String v : e.getValue()) {
+                parts.add(encode(e.getKey()) + "=" + encode(v));
+            }
+        }
+        return String.join("&", parts);
+    }
+
+    private static String decode(String s) {
+        try { return URLDecoder.decode(s, StandardCharsets.UTF_8); } catch (Exception e) { return s; }
+    }
+    private static String encode(String s) {
+        try { return URLEncoder.encode(s, StandardCharsets.UTF_8); } catch (Exception e) { return s; }
+    }
+
+    private static boolean classPresent(String cn) {
+        try { Class.forName(cn); return true; } catch (Throwable e) { return false; }
+    }
+
+    private static String htmlUnescape(String s) {
+        if (s == null) return null;
+        return s.replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'");
+    }
+
+    private record Body(MediaType contentType, String text, int status) {}
+    private record Extracted(String title, String excerpt) {}
+}

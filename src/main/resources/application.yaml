@@ -31,6 +31,13 @@ ai:
         lang: zh-CN
         country: jp
         safe: true
+    web-fetch:
+      allowed-schemes: [ http, https ]
+      timeout: 8s
+      max-in-memory-bytes: 524288   # 512KB
+      default-max-chars: 2000
+      user-agent: JavelinAI-WebFetch/1.0
+      ssrf-guard-enabled: true
   memory:
     storage: database        # set to in-memory to use the in-memory implementation
     max-messages: 12
