@@ -55,11 +55,9 @@ spring:
           temperature: 0.2
   main:
     web-application-type: reactive
-  http:
-    codecs:
-      max-in-memory-size: 16MB
+
   datasource:
-    url: jdbc:mysql://localhost:3306/java_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
+    url: jdbc:mysql://localhost:3306/java_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
     username: root
     password: 123
     driver-class-name: com.mysql.cj.jdbc.Driver
