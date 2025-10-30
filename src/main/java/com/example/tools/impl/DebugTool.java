@@ -1,8 +1,8 @@
 package com.example.tools.impl;
 
 import com.example.ai.tools.AiToolComponent;
+import com.example.api.dto.ToolResult;
 import com.example.tools.AiTool;
-import com.example.tools.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,11 +40,11 @@ public class DebugTool implements AiTool {
     @Override
     public ToolResult execute(Map<String, Object> args) throws Exception {
         log.info("debug tool from tool");
-        // 随便返回点内容：可以是纯文本，也可以是JSON字符串。执行器会原样放进 tool 的 content。
-        String payload = mapper.writeValueAsString(Map.of(
+        Map<String, Object> payload = Map.of(
                 "type", "text",
                 "value", "debug from tool"
-        ));
-        return new ToolResult(name(), payload);
+        );
+        return ToolResult.success(null, name(), false, Map.of("payload", payload));
     }
 }
+

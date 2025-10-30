@@ -1,9 +1,9 @@
 package com.example.tools.impl;
 
 import com.example.ai.tools.AiToolComponent;
+import com.example.api.dto.ToolResult;
 import com.example.service.ConversationMemoryService;
 import com.example.tools.AiTool;
-import com.example.tools.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -68,9 +68,8 @@ public class FindRelevantMemoryTool implements AiTool {
         }
 
         List<Map<String, Object>> relevant = memoryService.findRelevant(userId, conversationId, query, maxMessages);
-        String json = mapper.writeValueAsString(relevant);
         log.debug("Tool '{}' returned {} message(s)", name(), relevant.size());
-        return new ToolResult(name(), json);
+        return ToolResult.success(null, name(), false, java.util.Map.of("payload", relevant));
     }
 
     private int normalizeWindow(int configured) {

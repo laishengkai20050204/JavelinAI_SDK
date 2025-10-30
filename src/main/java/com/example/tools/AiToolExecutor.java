@@ -1,5 +1,6 @@
 package com.example.tools;
 
+import com.example.api.dto.ToolResult;
 import com.example.tools.support.ToolDeduplicator;
 import com.example.tools.support.JsonCanonicalizer;
 import com.example.config.DedupProperties;
@@ -143,7 +144,7 @@ public class AiToolExecutor {
                     log.warn("[EXEC-ERR] tool={} ex={}: {}", tool.name(), ex.getClass().getSimpleName(), ex.getMessage(), ex);
                     throw ex;
                 }
-                contentJsonToReturn = result.contentJson();
+                contentJsonToReturn = mapper.writeValueAsString(result.data());
 
                 // ★【哨兵4】执行成功（去重分支）
                 log.debug("[EXEC-OK] tool={} branch=dedup payloadLen={} sample={}",
@@ -177,7 +178,7 @@ public class AiToolExecutor {
                 log.warn("[EXEC-ERR] tool={} ex={}: {}", tool.name(), ex.getClass().getSimpleName(), ex.getMessage(), ex);
                 throw ex;
             }
-            contentJsonToReturn = result.contentJson();
+            contentJsonToReturn = mapper.writeValueAsString(result.data());
 
             // ★【哨兵4'】执行成功（非去重分支）
             log.debug("[EXEC-OK] tool={} branch=no-dedup payloadLen={} sample={}",

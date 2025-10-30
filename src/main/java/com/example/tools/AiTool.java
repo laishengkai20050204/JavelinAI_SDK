@@ -1,5 +1,7 @@
 package com.example.tools;
 
+import com.example.api.dto.ToolResult;
+
 import java.util.Map;
 
 public interface AiTool {

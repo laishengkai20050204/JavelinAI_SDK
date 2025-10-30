@@ -1,206 +1,97 @@
-2025-10-29T13:56:31.258+08:00  INFO 26236 --- [ctor-http-nio-3] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
-2025-10-29T13:56:31.475+08:00  INFO 26236 --- [ctor-http-nio-3] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection com.mysql.cj.jdbc.ConnectionImpl@24c8c8e5
-2025-10-29T13:56:31.477+08:00  INFO 26236 --- [ctor-http-nio-3] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
-2025-10-29T13:56:31.482+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
-2025-10-29T13:56:31.499+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c1(String), step-59d6a72a-35b9-4fc0-859c-0a273383b4cd(String)
-2025-10-29T13:56:31.517+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectMaxSeq                     : <==      Total: 1
-2025-10-29T13:56:31.521+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-29T13:56:31.523+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c1(String), user(String), 调用一下调试工具(String), null, null, step-59d6a72a-35b9-4fc0-859c-0a273383b4cd(String), 1(Integer), DRAFT(String)
-2025-10-29T13:56:31.531+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-29T13:56:31.532+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectContext                    : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' ORDER BY created_at ASC, seq ASC, id ASC LIMIT ?
-2025-10-29T13:56:31.532+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectContext                    : ==> Parameters: u1(String), c1(String), 12(Integer)
-2025-10-29T13:56:31.534+08:00 DEBUG 26236 --- [ctor-http-nio-3] c.e.m.C.selectContext                    : <==      Total: 0
-2025-10-29T13:56:31.541+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [TOOLS-ALLOWED] [debug_tool, find_relevant_memory]
-2025-10-29T13:56:31.541+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [CB-REGISTERED] server=[debug_tool, find_relevant_memory], client-def=[]
-2025-10-29T13:56:31.541+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [TOOL-CHOICE] auto
-2025-10-29T13:56:31.549+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [AI-REQ] {
-  "model" : "qwen3:8b",
-  "tool_choice" : "auto",
-  "proxy_tool_calls" : true,
-  "parallel_tool_calls" : false,
-  "tool_context" : {
-    "userId" : "u1",
-    "conversationId" : "c1"
-  },
-  "messages" : [ {
-    "role" : "system",
-    "content" : "You are a helpful assistant who writes concise, accurate answers. If tools are available and helpful, propose function-calling tool calls."
-  }, {
-    "role" : "user",
-    "content" : "调用一下调试工具"
-  } ],
-  "tools" : [ {
-    "type" : "function",
-    "function" : {
-      "name" : "debug_tool",
-      "description" : "Print 'debug tool' to log and return a short text payload.",
-      "parameters" : {
-        "type" : "object",
-        "required" : [ ],
-        "properties" : { }
-      }
-    },
-    "x-execTarget" : "server"
-  }, {
-    "type" : "function",
-    "function" : {
-      "name" : "find_relevant_memory",
-      "description" : "Retrieve historical messages related to the current question on demand.",
-      "parameters" : {
-        "type" : "object",
-        "required" : [ "userId", "conversationId" ],
-        "properties" : {
-          "query" : {
-            "type" : "string"
-          },
-          "maxMessages" : {
-            "maximum" : 50,
-            "default" : 12,
-            "type" : "integer",
-            "minimum" : 1
-          },
-          "userId" : {
-            "type" : "string"
-          },
-          "conversationId" : {
-            "type" : "string"
-          }
-        }
-      }
-    },
-    "x-execTarget" : "server"
-  } ],
-  "compatibility" : "OPENAI"
-}
-2025-10-29T13:56:51.969+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [AI-RESP] {
-  "response_metadata" : {
-    "id" : "chatcmpl-458",
-    "model" : "qwen3:8b",
-    "rateLimit" : {
-      "requestsLimit" : null,
-      "requestsRemaining" : null,
-      "tokensLimit" : null,
-      "tokensRemaining" : null,
-      "requestsReset" : null,
-      "tokensReset" : null
-    },
-    "usage" : {
-      "acceptedPredictionTokens" : 0,
-      "promptTokensDetailsCachedTokens" : 0,
-      "rejectedPredictionTokens" : 0,
-      "reasoningTokens" : 0,
-      "audioTokens" : 0,
-      "generationTokens" : 194,
-      "totalTokens" : 435,
-      "promptTokens" : 241,
-      "completionTokenDetails" : {
-        "reasoningTokens" : 0,
-        "acceptedPredictionTokens" : 0,
-        "audioTokens" : 0,
-        "rejectedPredictionTokens" : 0
-      },
-      "promptTokensDetails" : {
-        "audioTokens" : 0,
-        "cachedTokens" : 0
-      }
-    },
-    "promptMetadata" : [ ],
-    "empty" : false
-  },
-  "generation_metadata" : {
-    "finishReason" : "TOOL_CALLS",
-    "contentFilters" : [ ],
-    "empty" : true
-  }
-}
-2025-10-29T13:56:51.969+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [AI-RESP:MSG] {
-  "role" : "assistant",
-  "content" : "",
-  "tool_calls" : [ {
-    "id" : "call_90hlvymx",
-    "type" : "function",
-    "function" : {
-      "name" : "debug_tool",
-      "arguments" : "{}"
-    }
-  } ]
-}
-2025-10-29T13:56:51.985+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing 1 tool call(s)
-2025-10-29T13:56:51.985+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing tool call id=call_90hlvymx name=debug_tool
-2025-10-29T13:56:51.985+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Lookup tool 'debug_tool'
-2025-10-29T13:56:51.985+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Resolved tool 'debug_tool' via exact match
-2025-10-29T13:56:51.986+08:00  INFO 26236 --- [oundedElastic-2] com.example.tools.impl.DebugTool         : debug tool
-2025-10-29T13:56:51.986+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Tool 'debug_tool' call id=call_90hlvymx produced payloadLength=41
-2025-10-29T13:56:51.986+08:00 DEBUG 26236 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Completed execution of 1 tool call(s)
-2025-10-29T13:56:51.990+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
-2025-10-29T13:56:51.990+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c1(String), step-59d6a72a-35b9-4fc0-859c-0a273383b4cd(String)
-2025-10-29T13:56:51.991+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectMaxSeq                     : <==      Total: 1
-2025-10-29T13:56:51.992+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-29T13:56:51.993+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c1(String), tool(String), debug from tool(String), {"name":"debug_tool","tool_call_id":"call_90hlvymx","reused":false,"status":"SUCCESS","data":{"_executedKey":"debug_tool::{}","payload":{"value":"debug from tool","type":"text"}}}(String), null, step-59d6a72a-35b9-4fc0-859c-0a273383b4cd(String), 2(Integer), DRAFT(String)
-2025-10-29T13:56:52.003+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-29T13:56:52.005+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectContext                    : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' ORDER BY created_at ASC, seq ASC, id ASC LIMIT ?
-2025-10-29T13:56:52.005+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectContext                    : ==> Parameters: u1(String), c1(String), 12(Integer)
-2025-10-29T13:56:52.007+08:00 DEBUG 26236 --- [oundedElastic-2] c.e.m.C.selectContext                    : <==      Total: 0
-2025-10-29T13:56:52.008+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [TOOLS-ALLOWED] [debug_tool, find_relevant_memory]
-2025-10-29T13:56:52.008+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [CB-REGISTERED] server=[debug_tool, find_relevant_memory], client-def=[]
-2025-10-29T13:56:52.009+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [TOOL-CHOICE] auto
-2025-10-29T13:56:52.009+08:00 DEBUG 26236 --- [oundedElastic-1] com.example.ai.SpringAiChatGateway       : [AI-REQ] {
-  "model" : "qwen3:8b",
-  "tool_choice" : "auto",
-  "proxy_tool_calls" : true,
-  "parallel_tool_calls" : false,
-  "tool_context" : {
-    "userId" : "u1",
-    "conversationId" : "c1"
-  },
-  "messages" : [ {
-    "role" : "system",
-    "content" : "You are a helpful assistant who writes concise, accurate answers. If tools are available and helpful, propose function-calling tool calls."
-  }, {
-    "role" : "user",
-    "content" : "调用一下调试工具"
-  } ],
-  "tools" : [ {
-    "type" : "function",
-    "function" : {
-      "name" : "debug_tool",
-      "description" : "Print 'debug tool' to log and return a short text payload.",
-      "parameters" : {
-        "type" : "object",
-        "required" : [ ],
-        "properties" : { }
-      }
-    },
-    "x-execTarget" : "server"
-  }, {
-    "type" : "function",
-    "function" : {
-      "name" : "find_relevant_memory",
-      "description" : "Retrieve historical messages related to the current question on demand.",
-      "parameters" : {
-        "type" : "object",
-        "required" : [ "userId", "conversationId" ],
-        "properties" : {
-          "query" : {
-            "type" : "string"
-          },
-          "maxMessages" : {
-            "maximum" : 50,
-            "default" : 12,
-            "type" : "integer",
-            "minimum" : 1
-          },
-          "userId" : {
-            "type" : "string"
-          },
-          "conversationId" : {
-            "type" : "string"
-          }
-        }
-      }
-    },
-    "x-execTarget" : "server"
-  } ],
-  "compatibility" : "OPENAI"
-}
-现在要解决工具返回没有给ai的问题
+2025-10-30T15:55:53.067+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
+2025-10-30T15:55:53.067+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.069+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : <==      Total: 1
+2025-10-30T15:55:53.070+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
+2025-10-30T15:55:53.071+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), assistant(String), (String), {"stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"function":{"name":"debug_tool","arguments":"{}"},"id":"call_jgdc9pij","type":"function"},{"function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"},"id":"call_po7yup79","type":"function"}],"source":"model","type":"assistant_decision"}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 2(Integer), DRAFT(String)
+2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : <==    Updates: 1
+2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.s.impl.DecisionServiceSpringAi       : [memory] decision draft persisted: user=u1 conv=c2 step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160 tcs=2
+2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.s.impl.DecisionServiceSpringAi       : [memory] decision draft persisted (new) step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160 fp=c19d02771037
+2025-10-30T15:55:53.081+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
+2025-10-30T15:55:53.081+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), user(String), 现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring(String), null, null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 1(Integer), DRAFT(String)
+2025-10-30T15:55:53.087+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : <==    Updates: 1
+2025-10-30T15:55:53.088+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
+2025-10-30T15:55:53.088+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.094+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 1
+2025-10-30T15:55:53.094+08:00 DEBUG 20052 --- [oundedElastic-1] c.example.service.SinglePathChatService  : [user] drafted & promoted (seq=1), step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160, len=43
+2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.s.impl.ToolExecutionPipelineImpl     : [TOOL-PIPE] fallbackArgs={userId=u1, conversationId=c2}
+2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing 1 tool call(s)
+2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing tool call id=call_jgdc9pij name=debug_tool
+2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Lookup tool 'debug_tool'
+2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Resolved tool 'debug_tool' via exact match
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.s.impl.ToolExecutionPipelineImpl     : [TOOL-PIPE] fallbackArgs={userId=u1, conversationId=c2}
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Executing 1 tool call(s)
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Executing tool call id=call_po7yup79 name=find_relevant_memory
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.ToolRegistry           : Lookup tool 'find_relevant_memory'
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.ToolRegistry           : Resolved tool 'find_relevant_memory' via exact match
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-CHECK] tool=debug_tool enabled=true force=false userId=u1 convId=c2 ttl=600
+2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-CHECK] tool=find_relevant_memory enabled=true force=false userId=u1 convId=c2 ttl=600
+2025-10-30T15:55:53.109+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-ARGS] tool=debug_tool ignore=[requestId, nonce, timestamp] raw={"userId":"u1","conversationId":"c2"} canon={"conversationId":"c2","userId":"u1"} hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
+2025-10-30T15:55:53.109+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-ARGS] tool=find_relevant_memory ignore=[requestId, nonce, timestamp] raw={"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"} canon={"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"} hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-LOOKUP] tool=debug_tool user=u1 conv=c2 hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-LOOKUP] tool=find_relevant_memory user=u1 conv=c2 hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP] user=u1 conv=c2 tool=find_relevant_memory hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP] user=u1 conv=c2 tool=debug_tool hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : ==>  Preparing: SELECT * FROM tool_executions WHERE user_id = ? AND conversation_id = ? AND tool_name = ? AND args_hash = ? AND status = 'SUCCESS' AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1
+2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : ==> Parameters: u1(String), c2(String), find_relevant_memory(String), a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55(String)
+2025-10-30T15:55:53.112+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : ==>  Preparing: SELECT * FROM tool_executions WHERE user_id = ? AND conversation_id = ? AND tool_name = ? AND args_hash = ? AND status = 'SUCCESS' AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1
+2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : <==      Total: 0
+2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : ==> Parameters: u1(String), c2(String), debug_tool(String), 168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3(String)
+2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP-RET] hit=false
+2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-MISS] tool=find_relevant_memory hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55 -> execute
+2025-10-30T15:55:53.114+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, state, step_id, seq, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' AND ( content LIKE CONCAT('%', ?, '%') OR JSON_SEARCH(payload, 'one', CONCAT('%', ?, '%')) IS NOT NULL ) ORDER BY created_at DESC, id DESC LIMIT ?
+2025-10-30T15:55:53.114+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : ==> Parameters: u1(String), c2(String), spring(String), spring(String), 5(Integer)
+2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : <==      Total: 0
+2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP-RET] hit=false
+2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-MISS] tool=debug_tool hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3 -> execute
+2025-10-30T15:55:53.115+08:00  INFO 20052 --- [oundedElastic-2] com.example.tools.impl.DebugTool         : debug tool from tool
+2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [EXEC-OK] tool=debug_tool branch=dedup payloadLen=53 sample={"payload":{"type":"text","value":"debug from tool"}}
+2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-SAVE] tool=debug_tool user=u1 conv=c2 hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3 ttl=600
+2025-10-30T15:55:53.116+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : ==>  Preparing: INSERT INTO tool_executions (user_id, conversation_id, tool_name, args_hash, status, args_json, result_json, expires_at) VALUES (?, ?, ?, ?, 'SUCCESS', ?, ?, ?) ON DUPLICATE KEY UPDATE result_json = VALUES(result_json), expires_at = VALUES(expires_at), updated_at = CURRENT_TIMESTAMP
+2025-10-30T15:55:53.118+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : ==> Parameters: u1(String), c2(String), debug_tool(String), 168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3(String), {"userId":"u1","conversationId":"c2"}(String), {"payload":{"type":"text","value":"debug from tool"}}(String), 2025-10-30T16:05:53.116450600(LocalDateTime)
+2025-10-30T15:55:53.120+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : <==      Total: 2
+2025-10-30T15:55:53.120+08:00 DEBUG 20052 --- [oundedElastic-3] .e.s.i.DatabaseConversationMemoryService : Database relevant search matched 2 message(s) userId=u1 conversationId=c2 query='spring'
+2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.impl.FindRelevantMemoryTool    : Tool 'find_relevant_memory' returned 2 message(s)
+2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [EXEC-OK] tool=find_relevant_memory branch=dedup payloadLen=1171 sample={"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调
+2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-SAVE] tool=find_relevant_memory user=u1 conv=c2 hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55 ttl=600
+2025-10-30T15:55:53.122+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : ==>  Preparing: INSERT INTO tool_executions (user_id, conversation_id, tool_name, args_hash, status, args_json, result_json, expires_at) VALUES (?, ?, ?, ?, 'SUCCESS', ?, ?, ?) ON DUPLICATE KEY UPDATE result_json = VALUES(result_json), expires_at = VALUES(expires_at), updated_at = CURRENT_TIMESTAMP
+2025-10-30T15:55:53.123+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : ==> Parameters: u1(String), c2(String), find_relevant_memory(String), a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55(String), {"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"}(String), {"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]}(String), 2025-10-30T16:05:53.121925200(LocalDateTime)
+2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : <==    Updates: 1
+2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : Persisted tool success: user=u1 conv=c2 tool=debug_tool ttl=600s
+2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Tool 'debug_tool' call id=call_jgdc9pij persisted SUCCESS, payloadLength=53
+2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Completed execution of 1 tool call(s)
+2025-10-30T15:55:53.128+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : <==    Updates: 1
+2025-10-30T15:55:53.128+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : Persisted tool success: user=u1 conv=c2 tool=find_relevant_memory ttl=600s
+2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Tool 'find_relevant_memory' call id=call_po7yup79 persisted SUCCESS, payloadLength=1171
+2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Completed execution of 1 tool call(s)
+2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
+2025-10-30T15:55:53.130+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.131+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : <==      Total: 1
+2025-10-30T15:55:53.132+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
+2025-10-30T15:55:53.132+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), tool(String), {"payload":{"type":"text","value":"debug from tool"}}(String), {"name":"debug_tool","tool_call_id":"call_jgdc9pij","reused":false,"status":"SUCCESS","args":"{\"conversationId\":\"c2\",\"userId\":\"u1\"}","data":{"payload":{"payload":{"type":"text","value":"debug from tool"}},"_executedKey":"debug_tool::{\"conversationId\":\"c2\",\"userId\":\"u1\"}","args":"{\"conversationId\":\"c2\",\"userId\":\"u1\"}"}}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 3(Integer), DRAFT(String)
+2025-10-30T15:55:53.138+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
+2025-10-30T15:55:53.139+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
+2025-10-30T15:55:53.140+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), tool(String), {"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]}(String), {"name":"find_relevant_memory","tool_call_id":"call_po7yup79","reused":false,"status":"SUCCESS","args":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}","data":{"payload":{"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]},"_executedKey":"find_relevant_memory::{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}","args":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 4(Integer), DRAFT(String)
+2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
+2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
+2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.156+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 2
+2025-10-30T15:55:53.157+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
+2025-10-30T15:55:53.157+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.160+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 0
+2025-10-30T15:55:53.162+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
+2025-10-30T15:55:53.163+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), user(String), 现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring(String), null, null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 1(Integer), DRAFT(String)
+2025-10-30T15:55:53.167+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
+2025-10-30T15:55:53.167+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
+2025-10-30T15:55:53.168+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
+2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 0
+2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.example.service.SinglePathChatService  : [user] drafted & promoted (seq=1), step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160, len=43
+2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' ORDER BY created_at ASC, seq ASC, id ASC LIMIT ?
+2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : ==> Parameters: u1(String), c2(String), 12(Integer)
+2025-10-30T15:55:53.173+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : <==      Total: 4
+2025-10-30T15:55:53.175+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.service.impl.ContextAssemblerImpl    : [TRACE M1] assembled modelMessages size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
+2025-10-30T15:55:53.175+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.s.impl.DecisionServiceSpringAi       : [TRACE M2] before gateway size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
+2025-10-30T15:55:53.176+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TRACE M3] gateway.in  size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
+2025-10-30T15:55:53.176+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TRACE M4] gateway.out size=5 last=ToolResponseMessage{responses=[ToolResponse[id=call_po7yup79, name=find_relevant_memory, responseData={"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","timestamp":"2025-10-30T07:54:35Z"},{"seq":2,"role":"assistant","type":"assistant_decision","state":"FINAL","source":"model","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","timestamp":"2025-10-30T07:55:53Z","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}]}]}]], messageType=TOOL, metadata={messageType=TOOL}}
+2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TOOLS-ALLOWED] [open_url, debug_tool, find_relevant_memory]
+2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [CB-REGISTERED] server=[debug_tool, find_relevant_memory], client-def=[open_url]
+2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TOOL-CHOICE] auto

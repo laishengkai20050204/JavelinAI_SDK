@@ -112,37 +112,37 @@ public class SinglePathChatService {
                     return Mono.empty();
                 });
 
-
-
         return preUser.then(preIngest).then(Mono.defer(() -> {
-            // 1) pending（只 SERVER）
+            // 1) 有挂起的 SERVER 工具先执行
             if (st.hasPendingServerTools()) {
                 return execPending(st);
             }
 
-            return  contextAssembler.assemble(st)
+            return contextAssembler.assemble(st)
                     .flatMap(ctx -> {
                         StepState withHash = st.withContextHash(ctx.hash());
                         var req = st.req();
                         String toolChoice = (req == null || req.toolChoice() == null) ? "" : req.toolChoice();
 
-                        // 3) toolChoice=none → 直接续写并结束
+                        // 2) toolChoice=none → 直接续写并结束
                         if ("none".equalsIgnoreCase(toolChoice)) {
                             return continueAnswer(withHash, ctx);
                         }
 
-                        // 4) 模型决策（以下保持你的原代码不变）
+                        // 3) 让模型做决策
                         return decisionService.decide(st, ctx)
                                 .flatMap(decision -> {
-                                    List<ToolCall> allCalls = decision.tools() == null ? List.of() : decision.tools();
+                                    List<ToolCall> allCalls = (decision.tools() == null) ? List.of() : decision.tools();
 
                                     if (!allCalls.isEmpty()) {
                                         stepStore.savePlannedCalls(st.stepId(), allCalls);
                                     }
 
+                                    // 没有任何工具 → 草稿/续写
                                     if (allCalls.isEmpty()) {
-                                        String draft = decision.assistantDraft();
-                                        if (org.springframework.util.StringUtils.hasText(draft)) {
+                                        String draft = org.springframework.util.StringUtils.hasText(decision.assistantDraft())
+                                                ? decision.assistantDraft() : null;
+                                        if (draft != null) {
                                             Map<String, Object> payload = new LinkedHashMap<>();
                                             payload.put("stepId", st.stepId());
                                             payload.put("type", "assistant");
@@ -153,28 +153,24 @@ public class SinglePathChatService {
                                         return continueAnswer(withHash, ctx);
                                     }
 
+                                    // 拆分 SERVER / CLIENT
                                     List<ToolCall> serverCalls = allCalls.stream()
                                             .filter(tc -> "SERVER".equalsIgnoreCase(tc.execTarget()))
                                             .collect(Collectors.toList());
+
                                     List<ToolCall> clientCalls = allCalls.stream()
                                             .filter(tc -> "CLIENT".equalsIgnoreCase(tc.execTarget()))
                                             .collect(Collectors.toList());
 
-                                    StepEvent decisionEvent = decisionEvent(allCalls);
-
-                                    List<StepEvent> extraEvents = new ArrayList<>();
+                                    // 先把客户端调用暂存，稍后（SERVER 执行完）再下发
                                     if (!clientCalls.isEmpty()) {
-                                        Map<String, Object> m = new LinkedHashMap<>();
-                                        m.put("type", "clientCalls");
-                                        m.put("calls", serializeCalls(clientCalls));
-                                        extraEvents.add(StepEvent.step(m));
+                                        stepStore.saveClientCalls(st.stepId(), clientCalls);
                                     }
 
-                                    if (!serverCalls.isEmpty()) {
-                                        List<StepEvent> events = new ArrayList<>();
-                                        events.add(decisionEvent);
-                                        events.addAll(extraEvents);
+                                    StepEvent decisionEvent = decisionEvent(allCalls);
 
+                                    if (!serverCalls.isEmpty()) {
+                                        // 去重后的待执行 SERVER 列表
                                         List<ToolCall> pending = serverCalls.stream()
                                                 .filter(tc -> {
                                                     String k = tc.name() + "::" + tc.stableArgs(objectMapper);
@@ -191,21 +187,40 @@ public class SinglePathChatService {
                                                 ));
 
                                         if (!pending.isEmpty()) {
+                                            // 仅发决策，不发 clientCalls，先让 SERVER 执行
+                                            List<StepEvent> events = List.of(decisionEvent);
                                             StepState next = withHash.withPending(pending);
                                             return Mono.just(StepTransition.of(next, events));
                                         } else {
-                                            String draft = decision.assistantDraft();
-                                            if (org.springframework.util.StringUtils.hasText(draft)) {
+                                            // SERVER 实际无活可干 → 若有 clientCalls，立刻下发并结束本轮等待前端
+                                            List<ToolCall> deferred = stepStore.pollClientCalls(st.stepId());
+                                            if (!deferred.isEmpty()) {
+                                                List<StepEvent> ev = new ArrayList<>();
+                                                ev.add(decisionEvent);
+                                                ev.add(StepEvent.step(Map.of(
+                                                        "type", "clientCalls",
+                                                        "calls", serializeCalls(deferred)
+                                                )));
+                                                return Mono.just(StepTransition.of(withHash.finish(), ev));
+                                            }
+
+                                            // 没有 clientCalls，则按草稿/续写兜底
+                                            String draft = org.springframework.util.StringUtils.hasText(decision.assistantDraft())
+                                                    ? decision.assistantDraft() : null;
+                                            if (draft != null) {
                                                 Map<String, Object> payload = new LinkedHashMap<>();
                                                 payload.put("stepId", st.stepId());
                                                 payload.put("type", "assistant");
                                                 payload.put("text", draft);
-                                                events.add(StepEvent.step(payload));
                                                 return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                        .thenReturn(StepTransition.of(withHash.finish(), events));
+                                                        .thenReturn(StepTransition.of(withHash.finish(), List.of(
+                                                                decisionEvent,
+                                                                StepEvent.step(payload)
+                                                        )));
                                             } else {
                                                 return continueAnswer(withHash, ctx).map(tr -> {
-                                                    List<StepEvent> merged = new ArrayList<>(events);
+                                                    List<StepEvent> merged = new ArrayList<>();
+                                                    merged.add(decisionEvent);
                                                     merged.addAll(tr.events());
                                                     return StepTransition.of(tr.nextState(), merged);
                                                 });
@@ -213,16 +228,43 @@ public class SinglePathChatService {
                                         }
                                     }
 
-                                    // 只有 CLIENT 工具（结束由你现有逻辑处理）
-                                    List<StepEvent> events = new ArrayList<>();
-                                    events.add(decisionEvent);
-                                    events.addAll(extraEvents);
-                                    return Mono.just(StepTransition.of(withHash.finish(), events));
+                                    // 没有 SERVER，只有 CLIENT → 直接下发 clientCalls 并结束本轮
+                                    List<ToolCall> deferred = stepStore.pollClientCalls(st.stepId());
+                                    if (!deferred.isEmpty()) {
+                                        List<StepEvent> ev = new ArrayList<>();
+                                        ev.add(decisionEvent);
+                                        ev.add(StepEvent.step(Map.of(
+                                                "type", "clientCalls",
+                                                "calls", serializeCalls(deferred)
+                                        )));
+                                        return Mono.just(StepTransition.of(withHash.finish(), ev));
+                                    }
+
+                                    // 理论上到不了这里；兜底：草稿/续写
+                                    String draft = org.springframework.util.StringUtils.hasText(decision.assistantDraft())
+                                            ? decision.assistantDraft() : null;
+                                    if (draft != null) {
+                                        Map<String, Object> payload = new LinkedHashMap<>();
+                                        payload.put("stepId", st.stepId());
+                                        payload.put("type", "assistant");
+                                        payload.put("text", draft);
+                                        return continuationService.appendAssistantToMemory(st.stepId(), draft)
+                                                .thenReturn(StepTransition.of(withHash.finish(), List.of(
+                                                        decisionEvent,
+                                                        StepEvent.step(payload)
+                                                )));
+                                    }
+                                    return continueAnswer(withHash, ctx).map(tr -> {
+                                        List<StepEvent> merged = new ArrayList<>();
+                                        merged.add(decisionEvent);
+                                        merged.addAll(tr.events());
+                                        return StepTransition.of(tr.nextState(), merged);
+                                    });
                                 });
                     });
         }));
-
     }
+
 
 
 
@@ -264,8 +306,22 @@ public class SinglePathChatService {
                         if (ek != null) st.executedKeys().add(String.valueOf(ek));
                     });
                     StepEvent toolsEvent = StepEvent.step(Map.of("type","tools","results", results));
+                    List<StepEvent> ev = new ArrayList<>();
+                    ev.add(toolsEvent);
+
+                    // SERVER 执行完，看看有没有延迟下发的 clientCalls
+                    List<ToolCall> deferred = stepStore.pollClientCalls(st.stepId());
+                    if (!deferred.isEmpty()) {
+                        ev.add(StepEvent.step(Map.of("type", "clientCalls", "calls", serializeCalls(deferred))));
+                        // 关键：结束本轮，等客户端把 clientResults 回传（下一次请求的 preIngest 会吸收它们）
+                        StepState next = st.withPending(List.of()).finish();
+                        return StepTransition.of(next, ev);
+                    }
+
+                    // 没有 clientCalls，则按原来的行为继续下一轮
                     StepState next = st.withPending(List.of()).nextLoop();
-                    return StepTransition.of(next, List.of(toolsEvent));
+                    return StepTransition.of(next, ev);
+
                 });
     }
 

@@ -2,7 +2,7 @@ package com.example.ai.tools;
 
 import com.example.tools.AiTool;
 import com.example.tools.ToolRegistry;
-import com.example.tools.ToolResult;
+import com.example.api.dto.ToolResult;
 import com.example.tools.impl.FindRelevantMemoryTool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -151,17 +151,9 @@ public class SpringAiToolAdapter {
         ObjectNode envelope = mapper.createObjectNode();
         envelope.put("tool", tool.name());
         envelope.set("args", mapper.valueToTree(effectiveArgs));
-        try {
-            JsonNode payload = StringUtils.hasText(result.contentJson())
-                    ? mapper.readTree(result.contentJson())
-                    : mapper.nullNode();
-            envelope.set("result", payload);
-            envelope.put("text", payload.isTextual() ? payload.asText() : payload.toString());
-        } catch (JsonProcessingException e) {
-            log.debug("Tool '{}' produced non-JSON payload, returning raw text", tool.name());
-            envelope.put("result_raw", result.contentJson());
-            envelope.put("text", result.contentJson());
-        }
+        JsonNode payload = mapper.valueToTree(result.data());
+        envelope.set("result", payload);
+        envelope.put("text", payload != null && payload.isTextual() ? payload.asText() : String.valueOf(result.data()));
         return envelope.toString();
     }
 

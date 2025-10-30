@@ -18,6 +18,8 @@ public class StepContextStore {
     // 暂存：本 step 刚执行完的工具结果
     private final ConcurrentMap<String, List<ToolResult>> toolResults = new ConcurrentHashMap<>();
 
+    private final Map<String, List<ToolCall>> deferredClientCalls = new ConcurrentHashMap<>();
+
     public void bind(String stepId, String userId, String conversationId) {
         if (stepId == null || userId == null || conversationId == null) return;
         map.put(stepId, new Key(userId, conversationId));
@@ -73,5 +75,15 @@ public class StepContextStore {
         map.clear();
         plannedCalls.clear();
         toolResults.clear();
+    }
+
+    public void saveClientCalls(String stepId, List<ToolCall> calls) {
+        if (calls != null && !calls.isEmpty()) {
+            deferredClientCalls.put(stepId, calls);
+        }
+    }
+
+    public List<ToolCall> pollClientCalls(String stepId) {
+        return Optional.ofNullable(deferredClientCalls.remove(stepId)).orElseGet(List::of);
     }
 }
