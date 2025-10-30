@@ -39,7 +39,7 @@ public class DebugTool implements AiTool {
 
     @Override
     public ToolResult execute(Map<String, Object> args) throws Exception {
-        log.info("debug tool");
+        log.info("debug tool from tool");
         // 随便返回点内容：可以是纯文本，也可以是JSON字符串。执行器会原样放进 tool 的 content。
         String payload = mapper.writeValueAsString(Map.of(
                 "type", "text",

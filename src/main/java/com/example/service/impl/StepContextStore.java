@@ -44,4 +44,34 @@ public class StepContextStore {
     public List<ToolResult> drainToolResults(String stepId) {
         return stepId == null ? List.of() : toolResults.remove(stepId);
     }
+
+    // ★ NEW: 释放某个 stepId 的所有临时状态
+    public void clear(String stepId) {
+        if (stepId == null) return;
+        map.remove(stepId);
+        plannedCalls.remove(stepId);
+        toolResults.remove(stepId);
+    }
+
+    // ★ NEW: 可选，按 userId+conversationId 批量清理（例如用户中断会话时）
+    public void clearByUserConv(String userId, String conversationId) {
+        if (userId == null || conversationId == null) return;
+        for (Iterator<Map.Entry<String, Key>> it = map.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Key> e = it.next();
+            Key k = e.getValue();
+            if (userId.equals(k.userId()) && conversationId.equals(k.conversationId())) {
+                String stepId = e.getKey();
+                it.remove();
+                plannedCalls.remove(stepId);
+                toolResults.remove(stepId);
+            }
+        }
+    }
+
+    // ★ NEW: 可选，测试或全局重置用
+    public void clearAll() {
+        map.clear();
+        plannedCalls.clear();
+        toolResults.clear();
+    }
 }

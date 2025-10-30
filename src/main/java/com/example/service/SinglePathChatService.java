@@ -56,8 +56,18 @@ public class SinglePathChatService {
             return;
         }
         if (st.finished() || guardrails.reachedMaxLoops(st)) {
+
+            // ★ 先统一转正（覆盖所有无 SERVER 工具的结束路径）
+            promoteDraftsToFinalSafe(st);
+
+            // 然后发 finished
             sink.next(StepEvent.finished(st.stepId(), st.loop()));
             sink.complete();
+
+            // 最后清缓存、解绑
+            contextAssembler.clearPerStepCaches(st.stepId());
+            // 若有：decisionService.clearStep(st.stepId());
+            stepStore.clear(st.stepId());
             return;
         }
 
@@ -190,6 +200,15 @@ public class SinglePathChatService {
                 });
     }
 
+    private void promoteDraftsToFinalSafe(StepState st) {
+        var r = st.req();
+        if (r == null) return;
+        try {
+            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
+        } catch (Exception e) {
+            log.warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
+        }
+    }
 
 
     private Mono<StepTransition> execPending(StepState st) {
@@ -248,10 +267,15 @@ public class SinglePathChatService {
                         toolPipeline.execute(call, uid, cid)
                                 .flatMap(res -> toolPipeline.record(st.stepId(), callCtx.name(), fp, res).thenReturn(res))
                 )
-                .map(res -> ToolResult.success(
-                        callCtx.id(), callCtx.name(), res.reused(),
-                        Map.of("payload", res.data(), "_executedKey", executedKey) // ← 附带去重键
-                ));
+                .map(res -> {
+                    Map<String,Object> data = new LinkedHashMap<>();
+                    data.put("payload", res.data());     // 原始返回对象（Map/String/…）
+                    data.put("_executedKey", executedKey);
+                    data.put("args", argsStable);        // ★ 带上权威参数（字符串）
+                    return ToolResult.success(
+                            callCtx.id(), callCtx.name(), res.reused(), data
+                    );
+                });
     }
 
     private ToolCall withContextIds(com.example.api.dto.StepState st,

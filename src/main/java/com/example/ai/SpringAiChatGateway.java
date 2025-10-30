@@ -3,6 +3,7 @@ package com.example.ai;
 import com.example.config.AiProperties;
 import com.example.ai.tools.SpringAiToolAdapter;
 import com.example.service.impl.StepContextStore;
+import com.example.util.MsgTrace;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -106,58 +107,47 @@ public class SpringAiChatGateway {
         if (messagesObj == null) throw new IllegalArgumentException("messages is required");
 
         List<Map<String, Object>> messageMaps = convertMessagesObject(messagesObj);
-        List<Message> messages = new ArrayList<>(
-                messageMaps.stream().map(this::mapToMessage).filter(Objects::nonNull).toList()
-        );
+
+        String seal = String.valueOf(payload.get("_tamperSeal"));
+        String m3Digest = MsgTrace.digest(messageMaps);
+        log.debug("[TRACE M3] gateway.in  size={} last={} digest={}",
+                messageMaps.size(), MsgTrace.lastLine(messageMaps), m3Digest);
+
 
         // --- 新增：若上游已扁平化，则跳过 structured 插入 ---
         boolean flattened = "true".equalsIgnoreCase(String.valueOf(payload.get("_flattened")));
 
-        // ★ NEW: 把 ContextAssembler 给的结构化工具消息插进来
-        Object structuredObj = payload.get("structuredToolMessages");
-        if (structuredObj == null) {
-            // 兼容字段名 'structured'
-            structuredObj = payload.get("structured");
-        }
-        if (structuredObj != null) {
-            List<Map<String, Object>> structuredMaps = convertMessagesObject(structuredObj);
-            List<Message> structuredMsgs = structuredMaps.stream()
-                    .map(this::mapToMessage).filter(Objects::nonNull).toList();
-
-            // 插入位置：最后一条 user 之前（通常那条就是“本轮提问”）
-            int insertAt = indexBeforeLastUser(messages);
-            if (insertAt < 0) insertAt = messages.size();
-            messages.addAll(insertAt, structuredMsgs);
-            log.debug("[AI-REQ:STRUCTURED] inserted={} atIndex={}", structuredMsgs.size(), insertAt);
+        // —— 铅封校验 #1：如果 flattened=true 但 m3 与 seal 不同，说明 Decision→Gateway 之间有人改了
+        if (flattened && seal != null && !seal.isBlank() && !seal.equals(m3Digest)) {
+            log.error("[TRACE M3] TAMPER between Decision and Gateway: seal={} m3={}", seal, m3Digest);
+            // 可选：抛异常来抓堆栈
+            // throw new IllegalStateException("Messages tampered before toPrompt()");
         }
 
-        // === 你原来基于 stepId 的 plannedCalls / toolResults 追加，保留不动 ===
-        String stepId = asString(payload.get("stepId"));
-/*        if (org.springframework.util.StringUtils.hasText(stepId)) {
-            var planned = stepStore.drainPlannedCalls(stepId);
-            if (planned != null && !planned.isEmpty()) {
-                List<AssistantMessage.ToolCall> tcs = new ArrayList<>();
-                for (var c : planned) {
-                    tcs.add(new AssistantMessage.ToolCall(
-                            c.id(), "function", c.name(), c.stableArgs(mapper)
-                    ));
-                }
-                messages.add(new AssistantMessage("", Map.of(), tcs));
+        List<Message> messages = new ArrayList<>(
+                messageMaps.stream().map(this::mapToMessage).filter(Objects::nonNull).toList()
+        );
+
+
+        if (!flattened) {
+            Object structuredObj = payload.get("structuredToolMessages");
+            if (structuredObj == null) structuredObj = payload.get("structured"); // 兼容别名
+
+            if (structuredObj != null) {
+                List<Map<String, Object>> structuredMaps = convertMessagesObject(structuredObj);
+                List<Message> structuredMsgs = structuredMaps.stream()
+                        .map(this::mapToMessage).filter(Objects::nonNull).toList();
+
+                int insertAt = indexBeforeLastUser(messages);
+                if (insertAt < 0) insertAt = messages.size();
+                messages.addAll(insertAt, structuredMsgs);
+                log.debug("[AI-REQ:STRUCTURED] inserted={} atIndex={}", structuredMsgs.size(), insertAt);
             }
-            var results = stepStore.drainToolResults(stepId);
-            if (results != null && !results.isEmpty()) {
-                for (var r : results) {
-                    String content = readableFromToolResult(r.data());
-                    ToolResponseMessage.ToolResponse resp = new ToolResponseMessage.ToolResponse(
-                            r.callId(), (r.name() == null ? "" : r.name()), (content == null ? "" : content)
-                    );
-                    messages.add(new ToolResponseMessage(List.of(resp)));
-                }
-            }
-            log.debug("[AI-REQ:EXTRA] stepId={} plannedCalls={} toolResults={} totalMessages={}",
-                    stepId, planned == null ? 0 : planned.size(),
-                    results == null ? 0 : results.size(), messages.size());
-        }*/
+        }
+        // M4: 出参（已经 map 成 Spring AI 的 Message 对象，方便对比数量）
+        log.debug("[TRACE M4] gateway.out size={} last={}",
+                messages.size(),
+                (messages.isEmpty() ? "<empty>" : messages.get(messages.size()-1)));
 
         FunctionCallingOptions options = buildOptions(payload, mode);
         return new Prompt(messages, options);

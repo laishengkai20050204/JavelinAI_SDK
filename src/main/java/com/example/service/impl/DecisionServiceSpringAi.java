@@ -7,6 +7,7 @@ import com.example.service.ConversationMemoryService;
 import com.example.service.DecisionService;
 import com.example.tools.support.JsonCanonicalizer;
 import com.example.util.Fingerprint;
+import com.example.util.MsgTrace;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -34,50 +35,28 @@ public class DecisionServiceSpringAi implements DecisionService {
 
     @Override
     public Mono<ModelDecision> decide(StepState st, AssembledContext ctx) {
-        // 1) 组 messages：system + 历史纯文本
-        List<Map<String, Object>> messages = new ArrayList<>();
-        messages.add(msg("system",
-                "You are a helpful assistant who writes concise, accurate answers. " +
-                        "If tools are available and helpful, propose function-calling tool calls."));
+        // 由 ContextAssemblerImpl 统一产出的最终 messages
+        List<Map<String, Object>> messages =
+                (ctx != null && ctx.modelMessages() != null) ? ctx.modelMessages() : List.of();
 
-        // 历史文本（user/assistant）——保持你原先顺序
-        if (ctx != null && ctx.messages() != null) {
-            for (ChatMessage m : ctx.messages()) {
-                if (StringUtils.hasText(m.content())) {
-                    messages.add(msg(m.role(), m.content()));
-                }
-            }
-        }
+        String m2Digest = MsgTrace.digest(messages);
+        log.debug("[TRACE M2] before gateway size={} last={} digest={}",
+                messages.size(), MsgTrace.lastLine(messages), m2Digest);
 
-        // ★★ 关键：把“结构化工具消息”按 DB 顺序一条条追加到 messages（不要再透传给网关插入）
-        if (ctx != null && ctx.structuredToolMessages() != null && !ctx.structuredToolMessages().isEmpty()) {
-            // 这里假设 ctx.structuredToolMessages() 已经是按 (timestamp, seq) 排好序的
-            for (Map<String, Object> toolMsg : ctx.structuredToolMessages()) {
-                messages.add(toolMsg); // 不改动，保持 {role:"assistant", tool_calls:[...]} / {role:"tool", ...} 原样
-            }
-        }
-
-        // 最后再补“本轮 user”
-        if (messages.isEmpty() || !"user".equals(messages.get(messages.size()-1).get("role"))) {
-            messages.add(msg("user", Optional.ofNullable(st.req().q()).orElse("")));
-        }
-
-        // 2) 透传给网关：只传扁平化后的 messages；不要再传 structuredToolMessages
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", props.getModel());
         payload.put("messages", messages);
-        if (StringUtils.hasText(st.req().toolChoice())) {
-            payload.put("toolChoice", st.req().toolChoice());
-        }
-        if (st.req().clientTools() != null) {
-            payload.put("clientTools", st.req().clientTools());
-        }
+        payload.put("_flattened", true);
+
+        // —— 铅封：把 digest 放进 payload
+        payload.put("_tamperSeal", m2Digest);
+
+        // 其他字段照旧...
+        if (StringUtils.hasText(st.req().toolChoice())) payload.put("toolChoice", st.req().toolChoice());
+        if (st.req().clientTools() != null) payload.put("clientTools", st.req().clientTools());
         payload.put("userId", st.req().userId());
         payload.put("conversationId", st.req().conversationId());
         payload.put("stepId", st.stepId());
-
-        // 告诉网关“已经扁平化”，以便其跳过任何二次插入
-        payload.put("_flattened", true);
 
         AiProperties.Mode mode = props.getMode();
 
