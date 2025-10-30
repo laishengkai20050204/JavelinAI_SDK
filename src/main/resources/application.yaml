@@ -20,6 +20,17 @@ ai:
     callStep:
       ttl-minutes: 30
       maximum-size: 10000
+    web-search: # ← 这里也从 web_search 改成 web-search
+      provider: serper
+      serper:
+        base-url: https://google.serper.dev   # 建议也用 kebab-case
+        api-key: ${SERPER_API_KEY}
+        timeout: 8s
+      defaults:
+        top-k: 5
+        lang: zh-CN
+        country: jp
+        safe: true
   memory:
     storage: database        # set to in-memory to use the in-memory implementation
     max-messages: 12

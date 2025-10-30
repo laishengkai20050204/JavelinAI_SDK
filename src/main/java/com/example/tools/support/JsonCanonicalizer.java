@@ -28,4 +28,14 @@ public class JsonCanonicalizer {
         }
         return node; // 值类型
     }
+
+    public static String canonicalize(ObjectMapper mapper, JsonNode node, Set<String> ignore) {
+        JsonNode norm = normalize(mapper, node, ignore);
+        try {
+            return mapper.writeValueAsString(norm);
+        } catch (Exception e) {
+            return "null";
+        }
+    }
+
 }
