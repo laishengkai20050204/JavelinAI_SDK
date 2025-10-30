@@ -46,7 +46,7 @@ public class WebSearchTool implements AiTool {
     public void checkConfig() {
         var s = props.getSerper();
         log.info("[web_search] baseUrl={}, timeout={}, apiKey?={}",
-                s.getBaseUrl(), s.getTimeout(), (s.getApiKey() != null));
+                s.getBaseUrl(), s.getTimeout(), s.getApiKey());
     }
 
     @Override
