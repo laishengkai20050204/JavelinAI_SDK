@@ -403,22 +403,25 @@ public class SpringAiChatGateway {
     private Set<String> buildAllowedFunctions(List<ToolDef> defs,
                                               @Nullable String forcedFunction,
                                               String normalizedToolChoice) {
+        // 1) 显式禁用：不允许任何函数
         if ("none".equals(normalizedToolChoice)) return Collections.emptySet();
+
+        // 2) 强制单函数：仅允许该函数
         if (forcedFunction != null && StringUtils.hasText(forcedFunction)) {
             LinkedHashSet<String> forced = new LinkedHashSet<>();
             forced.add(forcedFunction);
             return forced;
         }
+
+        // 3) 并集策略：请求声明的函数 ∪ 服务端已注册的全部工具
         LinkedHashSet<String> allowed = new LinkedHashSet<>();
         for (ToolDef def : defs) {
             if (StringUtils.hasText(def.name())) allowed.add(def.name());
         }
-        if (allowed.isEmpty() && !"none".equals(normalizedToolChoice)) {
-            Set<String> serverAll = toolAdapter.functionCallbacks().stream()
-                    .map(FunctionCallback::getName)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            allowed.addAll(serverAll);
-        }
+        Set<String> serverAll = toolAdapter.functionCallbacks().stream()
+                .map(FunctionCallback::getName)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        allowed.addAll(serverAll);
         return allowed;
     }
 

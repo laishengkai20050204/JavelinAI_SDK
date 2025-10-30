@@ -17,6 +17,7 @@ import reactor.core.publisher.*;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -30,15 +31,21 @@ public class SinglePathChatService {
     private final ToolExecutionPipeline toolPipeline;
     private final ContinuationService continuationService;
     private final ConversationMemoryService memoryService;
-    private final AiProperties aiProperties;
     private final Guardrails guardrails;
     private final ObjectMapper objectMapper;
     private final StepContextStore stepStore;
+    private final ClientResultIngestor clientResultIngestor;
+    private final Set<String> userDraftSaved = ConcurrentHashMap.newKeySet();
+
 
     public Flux<StepEvent> run(ChatRequest req) {
         return Flux.create(sink -> {
             String stepId = "step-" + UUID.randomUUID();
             StepState init = StepState.init(req, stepId);
+
+            if (req != null) {
+                stepStore.bind(stepId, req.userId(), req.conversationId());
+            }
 
             sink.next(StepEvent.started(stepId, init.loop()));
 
@@ -85,130 +92,136 @@ public class SinglePathChatService {
     }
 
     private Mono<StepTransition> doOneStep(StepState st) {
-        // 1) pending 优先消费（仅 SERVER）
-        if (st.hasPendingServerTools()) {
-            return execPending(st);
+
+        if (st.req() != null) {
+            stepStore.bind(st.stepId(), st.req().userId(), st.req().conversationId());
         }
 
-        // 2) 组装记忆
-        return contextAssembler.assemble(st)
-                .flatMap(ctx -> {
-                    StepState withHash = st.withContextHash(ctx.hash());
+        // === 0) 串行吸收客户端结果 ===
+        Mono<Void> preIngest = Mono
+                .defer(() -> {
+                    var r = st.req();
+                    List<Map<String,Object>> cr = (r == null ? null : r.clientResults());
+                    return clientResultIngestor.ingest(st, (cr == null) ? List.of() : cr);
+                })
+                .onErrorResume(ex -> {
+                    log.warn("[clientResults] ingest failed, step={}, err={}", st.stepId(), ex.toString());
+                    return Mono.empty();
+                });
 
-                    // 3) toolChoice=none → 直接续写并结束
-                    if ("none".equalsIgnoreCase(st.req().toolChoice())) {
-                        return continueAnswer(withHash, ctx);
-                    }
+        return preIngest.then(Mono.defer(() -> {
+            // 1) pending（只 SERVER）
+            if (st.hasPendingServerTools()) {
+                return execPending(st);
+            }
 
-                    // 4) 模型决策
-                    return decisionService.decide(st, ctx)
-                            .flatMap(decision -> {
-                                List<ToolCall> allCalls = decision.tools() == null ? List.of() : decision.tools();
+            return  contextAssembler.assemble(st)
+                    .flatMap(ctx -> {
+                        StepState withHash = st.withContextHash(ctx.hash());
+                        var req = st.req();
+                        String toolChoice = (req == null || req.toolChoice() == null) ? "" : req.toolChoice();
 
-                                // 存计划（给网关拼 assistant/tool 用）
-                                if (!allCalls.isEmpty()) {
-                                    stepStore.savePlannedCalls(st.stepId(), allCalls);
-                                }
+                        // 3) toolChoice=none → 直接续写并结束
+                        if ("none".equalsIgnoreCase(toolChoice)) {
+                            return continueAnswer(withHash, ctx);
+                        }
 
-                                // 4.1 没有工具建议：复用草稿；否则续写
-                                if (allCalls.isEmpty()) {
-                                    String draft = decision.assistantDraft();
-                                    if (org.springframework.util.StringUtils.hasText(draft)) {
-                                        Map<String, Object> payload = new LinkedHashMap<>();
-                                        payload.put("stepId", st.stepId());
-                                        payload.put("type", "assistant");
-                                        payload.put("text", draft);
-                                        return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                .thenReturn(StepTransition.of(withHash.finish(), List.of(StepEvent.step(payload))));
+                        // 4) 模型决策（以下保持你的原代码不变）
+                        return decisionService.decide(st, ctx)
+                                .flatMap(decision -> {
+                                    List<ToolCall> allCalls = decision.tools() == null ? List.of() : decision.tools();
+
+                                    if (!allCalls.isEmpty()) {
+                                        stepStore.savePlannedCalls(st.stepId(), allCalls);
                                     }
-                                    return continueAnswer(withHash, ctx);
-                                }
 
-                                // 4.2 拆分目标（注意作用域：在同一层里声明并使用）
-                                List<ToolCall> serverCalls = allCalls.stream()
-                                        .filter(tc -> "SERVER".equalsIgnoreCase(tc.execTarget()))
-                                        .collect(Collectors.toList());
-                                List<ToolCall> clientCalls = allCalls.stream()
-                                        .filter(tc -> "CLIENT".equalsIgnoreCase(tc.execTarget()))
-                                        .collect(Collectors.toList());
-
-                                // 决策事件（便于前端展示）
-                                StepEvent decisionEvent = decisionEvent(allCalls);
-
-                                // 客户端调用事件
-                                List<StepEvent> extraEvents = new ArrayList<>();
-                                if (!clientCalls.isEmpty()) {
-                                    Map<String, Object> m = new LinkedHashMap<>();
-                                    m.put("type", "clientCalls");
-                                    m.put("calls", serializeCalls(clientCalls));
-                                    extraEvents.add(StepEvent.step(m));
-                                }
-
-                                // 4.3 有 SERVER 调用
-                                if (!serverCalls.isEmpty()) {
-                                    List<StepEvent> events = new ArrayList<>();
-                                    events.add(decisionEvent);
-                                    events.addAll(extraEvents);
-
-                                    // 过滤出真正需要执行的 SERVER 调用（跨轮 + 本批 去重）
-                                    List<ToolCall> pending = serverCalls.stream()
-                                            .filter(tc -> {
-                                                String k = tc.name() + "::" + tc.stableArgs(objectMapper);
-                                                return !st.executedKeys().contains(k);
-                                            })
-                                            .collect(Collectors.collectingAndThen(
-                                                    Collectors.toMap(
-                                                            tc -> tc.name() + "::" + tc.stableArgs(objectMapper),
-                                                            tc -> tc,
-                                                            (a, b) -> a,
-                                                            LinkedHashMap::new
-                                                    ),
-                                                    m -> new ArrayList<>(m.values())
-                                            ));
-
-                                    if (!pending.isEmpty()) {
-                                        StepState next = withHash.withPending(pending);
-                                        return Mono.just(StepTransition.of(next, events));
-                                    } else {
-                                        // 全部被去重 → 看是否有草稿，否则续写一次
+                                    if (allCalls.isEmpty()) {
                                         String draft = decision.assistantDraft();
                                         if (org.springframework.util.StringUtils.hasText(draft)) {
                                             Map<String, Object> payload = new LinkedHashMap<>();
                                             payload.put("stepId", st.stepId());
                                             payload.put("type", "assistant");
                                             payload.put("text", draft);
-                                            events.add(StepEvent.step(payload));
                                             return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                    .thenReturn(StepTransition.of(withHash.finish(), events));
+                                                    .thenReturn(StepTransition.of(withHash.finish(), List.of(StepEvent.step(payload))));
+                                        }
+                                        return continueAnswer(withHash, ctx);
+                                    }
+
+                                    List<ToolCall> serverCalls = allCalls.stream()
+                                            .filter(tc -> "SERVER".equalsIgnoreCase(tc.execTarget()))
+                                            .collect(Collectors.toList());
+                                    List<ToolCall> clientCalls = allCalls.stream()
+                                            .filter(tc -> "CLIENT".equalsIgnoreCase(tc.execTarget()))
+                                            .collect(Collectors.toList());
+
+                                    StepEvent decisionEvent = decisionEvent(allCalls);
+
+                                    List<StepEvent> extraEvents = new ArrayList<>();
+                                    if (!clientCalls.isEmpty()) {
+                                        Map<String, Object> m = new LinkedHashMap<>();
+                                        m.put("type", "clientCalls");
+                                        m.put("calls", serializeCalls(clientCalls));
+                                        extraEvents.add(StepEvent.step(m));
+                                    }
+
+                                    if (!serverCalls.isEmpty()) {
+                                        List<StepEvent> events = new ArrayList<>();
+                                        events.add(decisionEvent);
+                                        events.addAll(extraEvents);
+
+                                        List<ToolCall> pending = serverCalls.stream()
+                                                .filter(tc -> {
+                                                    String k = tc.name() + "::" + tc.stableArgs(objectMapper);
+                                                    return !st.executedKeys().contains(k);
+                                                })
+                                                .collect(Collectors.collectingAndThen(
+                                                        Collectors.toMap(
+                                                                tc -> tc.name() + "::" + tc.stableArgs(objectMapper),
+                                                                tc -> tc,
+                                                                (a, b) -> a,
+                                                                LinkedHashMap::new
+                                                        ),
+                                                        m -> new ArrayList<>(m.values())
+                                                ));
+
+                                        if (!pending.isEmpty()) {
+                                            StepState next = withHash.withPending(pending);
+                                            return Mono.just(StepTransition.of(next, events));
                                         } else {
-                                            return continueAnswer(withHash, ctx).map(tr -> {
-                                                List<StepEvent> merged = new ArrayList<>(events);
-                                                merged.addAll(tr.events());
-                                                return StepTransition.of(tr.nextState(), merged);
-                                            });
+                                            String draft = decision.assistantDraft();
+                                            if (org.springframework.util.StringUtils.hasText(draft)) {
+                                                Map<String, Object> payload = new LinkedHashMap<>();
+                                                payload.put("stepId", st.stepId());
+                                                payload.put("type", "assistant");
+                                                payload.put("text", draft);
+                                                events.add(StepEvent.step(payload));
+                                                return continuationService.appendAssistantToMemory(st.stepId(), draft)
+                                                        .thenReturn(StepTransition.of(withHash.finish(), events));
+                                            } else {
+                                                return continueAnswer(withHash, ctx).map(tr -> {
+                                                    List<StepEvent> merged = new ArrayList<>(events);
+                                                    merged.addAll(tr.events());
+                                                    return StepTransition.of(tr.nextState(), merged);
+                                                });
+                                            }
                                         }
                                     }
-                                }
 
-                                // 4.4 只有 CLIENT 工具（serverCalls 为空但 allCalls 非空）
-                                List<StepEvent> events = new ArrayList<>();
-                                events.add(decisionEvent);
-                                events.addAll(extraEvents);
-                                return Mono.just(StepTransition.of(withHash.finish(), events));
-                            });
+                                    // 只有 CLIENT 工具（结束由你现有逻辑处理）
+                                    List<StepEvent> events = new ArrayList<>();
+                                    events.add(decisionEvent);
+                                    events.addAll(extraEvents);
+                                    return Mono.just(StepTransition.of(withHash.finish(), events));
+                                });
+                    });
+        }));
 
-                });
     }
 
-    private void promoteDraftsToFinalSafe(StepState st) {
-        var r = st.req();
-        if (r == null) return;
-        try {
-            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
-        } catch (Exception e) {
-            log.warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
-        }
-    }
+
+
+
 
 
     private Mono<StepTransition> execPending(StepState st) {
@@ -338,5 +351,49 @@ public class SinglePathChatService {
         try { return objectMapper.readValue(json, Map.class); }
         catch (Exception ignore) { return Map.of("_raw", json); }
     }
+
+    private void promoteDraftsToFinalSafe(StepState st) {
+        var r = st.req();
+        if (r == null) return;
+        try {
+            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
+        } catch (Exception e) {
+            log.warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
+        }
+    }
+
+    private Mono<Void> persistUserDraftIfAny(StepState st) {
+        var r = st.req();
+        if (r == null) return Mono.empty();
+
+        // 幂等：每个 step 只做一次
+        if (!userDraftSaved.add(st.stepId())) return Mono.empty();
+
+        String q = (r.q() == null ? "" : r.q().trim());
+        if (q.isEmpty()) return Mono.empty();
+
+        return Mono.fromRunnable(() -> {
+            String userId = r.userId();
+            String convId = r.conversationId();
+
+            // 让 user 成为本 step 的第一条（在 clientResults 之前调用此方法即可）
+            int seq = Optional.ofNullable(
+                    memoryService.findMaxSeq(userId, convId, st.stepId())
+            ).orElse(0) + 1;
+
+            memoryService.upsertMessage(
+                    userId, convId,
+                    "user", q, /* payload */ null,
+                    st.stepId(), seq, "DRAFT"
+            );
+
+            // 立刻转正，后续 ContextAssembler(select FINAL) 才能读到
+            memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
+
+            log.debug("[user] drafted & promoted, step={}, seq={}, len={}",
+                    st.stepId(), seq, q.length());
+        });
+    }
+
 
 }
