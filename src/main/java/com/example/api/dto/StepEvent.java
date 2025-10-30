@@ -19,9 +19,10 @@ public record StepEvent(String event, String ts, Object data) {
     public static StepEvent error(String stepId, int loop, String message) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("type", "error");
+        data.put("stepId", stepId);
         data.put("loop", loop);
         data.put("message", (message == null || message.isBlank()) ? "<no message>" : message);
-        return new StepEvent(stepId, "error", data);
+        return new StepEvent("error", now(), data);
     }
     public static StepEvent error(String stepId, int loop, Throwable t) {
         return error(stepId, loop, formatThrowable(t));
