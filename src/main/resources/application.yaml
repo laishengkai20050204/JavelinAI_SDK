@@ -38,6 +38,15 @@ ai:
       default-max-chars: 2000
       user-agent: JavelinAI-WebFetch/1.0
       ssrf-guard-enabled: true
+    python:
+      enabled: true
+      pythonCmd: python
+      timeout: 15s
+      maxOutputBytes: 65536
+      allowPip: false
+      useDocker: false       # 若你的宿主是 Linux 且装了 Docker，建议 true
+      dockerImage: python:3.11-slim
+      denyNetwork: true
   memory:
     storage: database        # set to in-memory to use the in-memory implementation
     max-messages: 12
