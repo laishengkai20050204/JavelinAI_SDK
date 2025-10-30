@@ -4,6 +4,7 @@ import com.example.api.dto.AssembledContext;
 import com.example.api.dto.ToolResult;
 import com.example.service.ConversationMemoryService;
 import com.example.service.ContinuationService;
+import com.example.util.ToolPayloads;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,7 +45,8 @@ public class ContinuationServiceImpl implements ContinuationService {
                 String argsStr = extractArgsString(data);
 
                 // 3) 可读字符串，写进 DB.content（模型看的就是这个）
-                String content = extractReadableTextFromData(data);
+                String content = ToolPayloads.extractReadableText(data, objectMapper);
+                if (content == null) content = "";
                 if (content == null) content = "";
 
                 // 4) 组织 payload（要带上 args & callId）

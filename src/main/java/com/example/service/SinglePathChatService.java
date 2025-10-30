@@ -9,6 +9,7 @@ import com.example.api.dto.ToolResult;
 import com.example.config.AiProperties;
 import com.example.service.impl.StepContextStore;
 import com.example.util.Fingerprint;
+import com.example.util.ToolPayloads;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -326,13 +327,12 @@ public class SinglePathChatService {
     }
 
     private Mono<ToolResult> execOneToolWithIdempotency(StepState st, ToolCall call) {
-        // ★ 注入 userId / conversationId，确保 AiToolExecutor 能持久化与复用
-        final ToolCall callCtx = withContextIds(st, call); // ★ 不要改形参，另起 final 变量
+        final ToolCall callCtx = withContextIds(st, call);
         final String argsStable = callCtx.stableArgs(objectMapper);
         final String executedKey = callCtx.name() + "::" + argsStable;
         String fp = Fingerprint.sha256(call.name() + "|" + argsStable + "|" + safe(st.contextHash()));
 
-        var req = st.req(); // 你已有
+        var req = st.req();
         String uid = (req == null ? null : req.userId());
         String cid = (req == null ? null : req.conversationId());
 
@@ -342,15 +342,20 @@ public class SinglePathChatService {
                                 .flatMap(res -> toolPipeline.record(st.stepId(), callCtx.name(), fp, res).thenReturn(res))
                 )
                 .map(res -> {
+                    // ★ 关键：把 res.data() 做“解包”再放进去，去掉 payload.payload 的双层
+                    Object inner = ToolPayloads.unwrap(res.data(), objectMapper);
+
                     Map<String,Object> data = new LinkedHashMap<>();
-                    data.put("payload", res.data());     // 原始返回对象（Map/String/…）
+                    data.put("payload", inner);       // 只保留一层 payload
                     data.put("_executedKey", executedKey);
-                    data.put("args", argsStable);        // ★ 带上权威参数（字符串）
+                    data.put("args", argsStable);     // 权威参数（字符串）
+
                     return ToolResult.success(
                             callCtx.id(), callCtx.name(), res.reused(), data
                     );
                 });
     }
+
 
     private ToolCall withContextIds(com.example.api.dto.StepState st,
                                                         com.example.api.dto.ToolCall call) {
