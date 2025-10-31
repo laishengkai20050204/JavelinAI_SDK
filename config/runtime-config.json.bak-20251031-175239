@@ -3,10 +3,7 @@
   "model" : "qwen3:8b",
   "toolsMaxLoops" : 2,
   "toolToggles" : {
-    "web_search" : false,
-    "debug_tool" : false,
-    "get_server_time" : false,
-    "python_exec" : false
+    "web_search" : false
   },
   "baseUrl" : "http://localhost:11434",
   "apiKey" : null,
