@@ -15,6 +15,16 @@ public class ConfigStore {
     private final ObjectMapper om;
     private Path dir()  { return Paths.get("config"); }
     private Path file() { return dir().resolve("runtime-config.json"); }
+    /** Load persisted runtime config if present; returns null when absent or unreadable. */
+    public RuntimeConfig loadOrNull() {
+        try {
+            Path f = file();
+            if (!Files.exists(f)) return null;
+            return om.readValue(f.toFile(), RuntimeConfig.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     public void save(RuntimeConfig cfg) throws IOException {
         Files.createDirectories(dir());

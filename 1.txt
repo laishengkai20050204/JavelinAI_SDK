@@ -1,97 +1,482 @@
-2025-10-30T15:55:53.067+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
-2025-10-30T15:55:53.067+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.069+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.selectMaxSeq                     : <==      Total: 1
-2025-10-30T15:55:53.070+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-30T15:55:53.071+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), assistant(String), (String), {"stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"function":{"name":"debug_tool","arguments":"{}"},"id":"call_jgdc9pij","type":"function"},{"function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"},"id":"call_po7yup79","type":"function"}],"source":"model","type":"assistant_decision"}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 2(Integer), DRAFT(String)
-2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.s.impl.DecisionServiceSpringAi       : [memory] decision draft persisted: user=u1 conv=c2 step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160 tcs=2
-2025-10-30T15:55:53.077+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.s.impl.DecisionServiceSpringAi       : [memory] decision draft persisted (new) step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160 fp=c19d02771037
-2025-10-30T15:55:53.081+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-30T15:55:53.081+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), user(String), 现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring(String), null, null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 1(Integer), DRAFT(String)
-2025-10-30T15:55:53.087+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-30T15:55:53.088+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
-2025-10-30T15:55:53.088+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.094+08:00 DEBUG 20052 --- [oundedElastic-1] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 1
-2025-10-30T15:55:53.094+08:00 DEBUG 20052 --- [oundedElastic-1] c.example.service.SinglePathChatService  : [user] drafted & promoted (seq=1), step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160, len=43
-2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.s.impl.ToolExecutionPipelineImpl     : [TOOL-PIPE] fallbackArgs={userId=u1, conversationId=c2}
-2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing 1 tool call(s)
-2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Executing tool call id=call_jgdc9pij name=debug_tool
-2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Lookup tool 'debug_tool'
-2025-10-30T15:55:53.104+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.ToolRegistry           : Resolved tool 'debug_tool' via exact match
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.s.impl.ToolExecutionPipelineImpl     : [TOOL-PIPE] fallbackArgs={userId=u1, conversationId=c2}
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Executing 1 tool call(s)
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Executing tool call id=call_po7yup79 name=find_relevant_memory
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.ToolRegistry           : Lookup tool 'find_relevant_memory'
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.ToolRegistry           : Resolved tool 'find_relevant_memory' via exact match
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-CHECK] tool=debug_tool enabled=true force=false userId=u1 convId=c2 ttl=600
-2025-10-30T15:55:53.105+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-CHECK] tool=find_relevant_memory enabled=true force=false userId=u1 convId=c2 ttl=600
-2025-10-30T15:55:53.109+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-ARGS] tool=debug_tool ignore=[requestId, nonce, timestamp] raw={"userId":"u1","conversationId":"c2"} canon={"conversationId":"c2","userId":"u1"} hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
-2025-10-30T15:55:53.109+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-ARGS] tool=find_relevant_memory ignore=[requestId, nonce, timestamp] raw={"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"} canon={"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"} hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-LOOKUP] tool=debug_tool user=u1 conv=c2 hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-LOOKUP] tool=find_relevant_memory user=u1 conv=c2 hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP] user=u1 conv=c2 tool=find_relevant_memory hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP] user=u1 conv=c2 tool=debug_tool hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : ==>  Preparing: SELECT * FROM tool_executions WHERE user_id = ? AND conversation_id = ? AND tool_name = ? AND args_hash = ? AND status = 'SUCCESS' AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1
-2025-10-30T15:55:53.110+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : ==> Parameters: u1(String), c2(String), find_relevant_memory(String), a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55(String)
-2025-10-30T15:55:53.112+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : ==>  Preparing: SELECT * FROM tool_executions WHERE user_id = ? AND conversation_id = ? AND tool_name = ? AND args_hash = ? AND status = 'SUCCESS' AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1
-2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.T.findValidSuccess                 : <==      Total: 0
-2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : ==> Parameters: u1(String), c2(String), debug_tool(String), 168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3(String)
-2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP-RET] hit=false
-2025-10-30T15:55:53.113+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-MISS] tool=find_relevant_memory hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55 -> execute
-2025-10-30T15:55:53.114+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, state, step_id, seq, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' AND ( content LIKE CONCAT('%', ?, '%') OR JSON_SEARCH(payload, 'one', CONCAT('%', ?, '%')) IS NOT NULL ) ORDER BY created_at DESC, id DESC LIMIT ?
-2025-10-30T15:55:53.114+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : ==> Parameters: u1(String), c2(String), spring(String), spring(String), 5(Integer)
-2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.T.findValidSuccess                 : <==      Total: 0
-2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : [MAP-LOOKUP-RET] hit=false
-2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-MISS] tool=debug_tool hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3 -> execute
-2025-10-30T15:55:53.115+08:00  INFO 20052 --- [oundedElastic-2] com.example.tools.impl.DebugTool         : debug tool from tool
-2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [EXEC-OK] tool=debug_tool branch=dedup payloadLen=53 sample={"payload":{"type":"text","value":"debug from tool"}}
-2025-10-30T15:55:53.115+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : [DEDUP-SAVE] tool=debug_tool user=u1 conv=c2 hash=168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3 ttl=600
-2025-10-30T15:55:53.116+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : ==>  Preparing: INSERT INTO tool_executions (user_id, conversation_id, tool_name, args_hash, status, args_json, result_json, expires_at) VALUES (?, ?, ?, ?, 'SUCCESS', ?, ?, ?) ON DUPLICATE KEY UPDATE result_json = VALUES(result_json), expires_at = VALUES(expires_at), updated_at = CURRENT_TIMESTAMP
-2025-10-30T15:55:53.118+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : ==> Parameters: u1(String), c2(String), debug_tool(String), 168761f9288970a3884a18da2f76ffb8e5f02b60b5e724d961efeb072d4593d3(String), {"userId":"u1","conversationId":"c2"}(String), {"payload":{"type":"text","value":"debug from tool"}}(String), 2025-10-30T16:05:53.116450600(LocalDateTime)
-2025-10-30T15:55:53.120+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectByContent                  : <==      Total: 2
-2025-10-30T15:55:53.120+08:00 DEBUG 20052 --- [oundedElastic-3] .e.s.i.DatabaseConversationMemoryService : Database relevant search matched 2 message(s) userId=u1 conversationId=c2 query='spring'
-2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.impl.FindRelevantMemoryTool    : Tool 'find_relevant_memory' returned 2 message(s)
-2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [EXEC-OK] tool=find_relevant_memory branch=dedup payloadLen=1171 sample={"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调
-2025-10-30T15:55:53.121+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : [DEDUP-SAVE] tool=find_relevant_memory user=u1 conv=c2 hash=a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55 ttl=600
-2025-10-30T15:55:53.122+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : ==>  Preparing: INSERT INTO tool_executions (user_id, conversation_id, tool_name, args_hash, status, args_json, result_json, expires_at) VALUES (?, ?, ?, ?, 'SUCCESS', ?, ?, ?) ON DUPLICATE KEY UPDATE result_json = VALUES(result_json), expires_at = VALUES(expires_at), updated_at = CURRENT_TIMESTAMP
-2025-10-30T15:55:53.123+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : ==> Parameters: u1(String), c2(String), find_relevant_memory(String), a7e1143afd7ca5299d615c392b77bcbe0d80177ffa8e6f1c65fdbfae62944d55(String), {"conversationId":"c2","maxMessages":5,"query":"spring","userId":"u1"}(String), {"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]}(String), 2025-10-30T16:05:53.121925200(LocalDateTime)
-2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.m.ToolExecutionMapper.upsertSuccess  : <==    Updates: 1
-2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] c.e.tools.support.ToolDeduplicator       : Persisted tool success: user=u1 conv=c2 tool=debug_tool ttl=600s
-2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Tool 'debug_tool' call id=call_jgdc9pij persisted SUCCESS, payloadLength=53
-2025-10-30T15:55:53.126+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.tools.AiToolExecutor         : Completed execution of 1 tool call(s)
-2025-10-30T15:55:53.128+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.ToolExecutionMapper.upsertSuccess  : <==    Updates: 1
-2025-10-30T15:55:53.128+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.tools.support.ToolDeduplicator       : Persisted tool success: user=u1 conv=c2 tool=find_relevant_memory ttl=600s
-2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Tool 'find_relevant_memory' call id=call_po7yup79 persisted SUCCESS, payloadLength=1171
-2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] com.example.tools.AiToolExecutor         : Completed execution of 1 tool call(s)
-2025-10-30T15:55:53.129+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : ==>  Preparing: SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND step_id = ?
-2025-10-30T15:55:53.130+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.131+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectMaxSeq                     : <==      Total: 1
-2025-10-30T15:55:53.132+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-30T15:55:53.132+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), tool(String), {"payload":{"type":"text","value":"debug from tool"}}(String), {"name":"debug_tool","tool_call_id":"call_jgdc9pij","reused":false,"status":"SUCCESS","args":"{\"conversationId\":\"c2\",\"userId\":\"u1\"}","data":{"payload":{"payload":{"type":"text","value":"debug from tool"}},"_executedKey":"debug_tool::{\"conversationId\":\"c2\",\"userId\":\"u1\"}","args":"{\"conversationId\":\"c2\",\"userId\":\"u1\"}"}}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 3(Integer), DRAFT(String)
-2025-10-30T15:55:53.138+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-30T15:55:53.139+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-30T15:55:53.140+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), tool(String), {"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]}(String), {"name":"find_relevant_memory","tool_call_id":"call_po7yup79","reused":false,"status":"SUCCESS","args":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}","data":{"payload":{"payload":[{"role":"user","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","state":"FINAL","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","seq":1,"timestamp":"2025-10-30T07:54:35Z"},{"role":"assistant","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}],"source":"model","state":"FINAL","type":"assistant_decision","seq":2,"timestamp":"2025-10-30T07:55:53Z"}]},"_executedKey":"find_relevant_memory::{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}","args":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}(String), null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 4(Integer), DRAFT(String)
-2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
-2025-10-30T15:55:53.149+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.156+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 2
-2025-10-30T15:55:53.157+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
-2025-10-30T15:55:53.157+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.160+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 0
-2025-10-30T15:55:53.162+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==>  Preparing: INSERT INTO conversation_messages (user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE content = VALUES(content), payload = VALUES(payload), message_timestamp = VALUES(message_timestamp)
-2025-10-30T15:55:53.163+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : ==> Parameters: u1(String), c2(String), user(String), 现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring(String), null, null, step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String), 1(Integer), DRAFT(String)
-2025-10-30T15:55:53.167+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.upsertMessage                    : <==    Updates: 1
-2025-10-30T15:55:53.167+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==>  Preparing: UPDATE conversation_messages SET state = 'FINAL' WHERE user_id = ? AND conversation_id = ? AND step_id = ? AND state = 'DRAFT'
-2025-10-30T15:55:53.168+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : ==> Parameters: u1(String), c2(String), step-e75f707a-e33f-4bbf-8cca-ff81692f0160(String)
-2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.promoteDraftsToFinal             : <==    Updates: 0
-2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.example.service.SinglePathChatService  : [user] drafted & promoted (seq=1), step=step-e75f707a-e33f-4bbf-8cca-ff81692f0160, len=43
-2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : ==>  Preparing: SELECT id, user_id, conversation_id, role, content, payload, message_timestamp, step_id, seq, state, created_at FROM conversation_messages WHERE user_id = ? AND conversation_id = ? AND state = 'FINAL' ORDER BY created_at ASC, seq ASC, id ASC LIMIT ?
-2025-10-30T15:55:53.170+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : ==> Parameters: u1(String), c2(String), 12(Integer)
-2025-10-30T15:55:53.173+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.m.C.selectContext                    : <==      Total: 4
-2025-10-30T15:55:53.175+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.service.impl.ContextAssemblerImpl    : [TRACE M1] assembled modelMessages size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
-2025-10-30T15:55:53.175+08:00 DEBUG 20052 --- [oundedElastic-3] c.e.s.impl.DecisionServiceSpringAi       : [TRACE M2] before gateway size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
-2025-10-30T15:55:53.176+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TRACE M3] gateway.in  size=5 last=tool :: {"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按... digest=c6a9c867b1899ef6d051675e7c52d97e185d56200cb55c3553782b5a0719f845
-2025-10-30T15:55:53.176+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TRACE M4] gateway.out size=5 last=ToolResponseMessage{responses=[ToolResponse[id=call_po7yup79, name=find_relevant_memory, responseData={"payload":[{"seq":1,"role":"user","state":"FINAL","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","content":"现在严格按照调用顺序，先调用调试工具，如果有返回，那就再用记忆搜索工具搜索spring","timestamp":"2025-10-30T07:54:35Z"},{"seq":2,"role":"assistant","type":"assistant_decision","state":"FINAL","source":"model","stepId":"step-e75f707a-e33f-4bbf-8cca-ff81692f0160","payload":"{\"type\": \"assistant_decision\", \"source\": \"model\", \"stepId\": \"step-e75f707a-e33f-4bbf-8cca-ff81692f0160\", \"tool_calls\": [{\"id\": \"call_jgdc9pij\", \"type\": \"function\", \"function\": {\"name\": \"debug_tool\", \"arguments\": \"{}\"}}, {\"id\": \"call_po7yup79\", \"type\": \"function\", \"function\": {\"name\": \"find_relevant_memory\", \"arguments\": \"{\\\"conversationId\\\":\\\"456\\\",\\\"maxMessages\\\":5,\\\"query\\\":\\\"spring\\\",\\\"userId\\\":\\\"123\\\"}\"}}]}","timestamp":"2025-10-30T07:55:53Z","tool_calls":[{"id":"call_jgdc9pij","type":"function","function":{"name":"debug_tool","arguments":"{}"}},{"id":"call_po7yup79","type":"function","function":{"name":"find_relevant_memory","arguments":"{\"conversationId\":\"456\",\"maxMessages\":5,\"query\":\"spring\",\"userId\":\"123\"}"}}]}]}]], messageType=TOOL, metadata={messageType=TOOL}}
-2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TOOLS-ALLOWED] [open_url, debug_tool, find_relevant_memory]
-2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [CB-REGISTERED] server=[debug_tool, find_relevant_memory], client-def=[open_url]
-2025-10-30T15:55:53.178+08:00 DEBUG 20052 --- [oundedElastic-2] com.example.ai.SpringAiChatGateway       : [TOOL-CHOICE] auto
+﻿import React, { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import {
+    Save, RefreshCw, Wand2, Rocket, ShieldCheck,
+    KeyRound, Link, Timer, Wrench, Eye, EyeOff, Plus, Trash2
+} from "lucide-react";
+
+/**
+ * AdminConfigConsole 鈥?Light/Dark follows system (Tailwind darkMode:'media')
+ * Endpoints:
+ *  GET  /admin/config         -> { runtime:{...}, effective:{...} }
+ *  PUT  /admin/config         -> merge semantics
+ *  POST /admin/reload
+ */
+export default function AdminConfigConsole() {
+    // 鐘舵€?
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [reloading, setReloading] = useState(false);
+    const [resetting, setResetting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [okMsg, setOkMsg] = useState<string | null>(null);
+
+    // 鍚庣杩斿洖
+    const [runtime, setRuntime] = useState<any | null>(null);
+    const [effective, setEffective] = useState<any | null>(null);
+
+    // 琛ㄥ崟
+    const [compatibility, setCompatibility] = useState<string>("OPENAI");
+    const [model, setModel] = useState<string>("");
+    const [toolsMaxLoops, setToolsMaxLoops] = useState<number>(2);
+    const [baseUrl, setBaseUrl] = useState<string>("");
+    const [newApiKey, setNewApiKey] = useState<string>("");
+    const [apiKeyMasked, setApiKeyMasked] = useState<string | null>(null);
+    const [clientTimeoutMs, setClientTimeoutMs] = useState<number | "">("");
+    const [streamTimeoutMs, setStreamTimeoutMs] = useState<number | "">("");
+    const [toolToggles, setToolToggles] = useState<Record<string, boolean>>({});
+    const [showDiff, setShowDiff] = useState<boolean>(false);
+
+    // 鍔犺浇
+    const load = async () => {
+        setLoading(true);
+        setError(null);
+        setOkMsg(null);
+        try {
+            const res = await fetch("/admin/config", { headers: { Accept: "application/json" } });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            const r = data.runtime ?? {};
+            const e = data.effective ?? {};
+            setRuntime(r);
+            setEffective(e);
+            setCompatibility(r.compatibility ?? e.compatibility ?? "OPENAI");
+            setModel(r.model ?? e.model ?? "");
+            setToolsMaxLoops(Number(r.toolsMaxLoops ?? e.toolsMaxLoops ?? 2));
+            setBaseUrl(r.baseUrl ?? "");
+            setApiKeyMasked(r.apiKeyMasked ?? e.apiKeyMasked ?? null);
+            setNewApiKey("");
+            setClientTimeoutMs(r.clientTimeoutMs ?? e.clientTimeoutMs ?? "");
+            setStreamTimeoutMs(r.streamTimeoutMs ?? e.streamTimeoutMs ?? "");
+            setToolToggles(r.toolToggles ?? {});
+        } catch (e: any) {
+            setError(e.message || String(e));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { load(); }, []);
+
+    // 璁＄畻灏嗚鎻愪氦鐨勫樊寮?
+    const diffPayload = useMemo(() => {
+        if (!runtime) return null;
+        const payload: any = {};
+        const push = (k: string, v: any, cur: any) => {
+            if (v === "") return; // 绌轰覆琛ㄧず鈥滀笉瑕嗙洊鈥?
+            if (JSON.stringify(v) !== JSON.stringify(cur)) payload[k] = v;
+        };
+        push("compatibility", compatibility || undefined, runtime.compatibility ?? undefined);
+        push("model", model || undefined, runtime.model ?? undefined);
+        push("toolsMaxLoops", Number.isFinite(Number(toolsMaxLoops)) ? Number(toolsMaxLoops) : undefined, runtime.toolsMaxLoops ?? undefined);
+        push("baseUrl", baseUrl || undefined, runtime.baseUrl ?? undefined);
+        push("clientTimeoutMs", clientTimeoutMs === "" ? undefined : Number(clientTimeoutMs), runtime.clientTimeoutMs ?? undefined);
+        push("streamTimeoutMs", streamTimeoutMs === "" ? undefined : Number(streamTimeoutMs), runtime.streamTimeoutMs ?? undefined);
+        if (newApiKey && newApiKey.trim().length > 0) payload.apiKey = newApiKey.trim();
+        if (JSON.stringify(toolToggles || {}) !== JSON.stringify(runtime.toolToggles || {})) payload.toolToggles = toolToggles;
+        return payload;
+    }, [runtime, compatibility, model, toolsMaxLoops, baseUrl, clientTimeoutMs, streamTimeoutMs, newApiKey, toolToggles]);
+
+    // 鎿嶄綔
+    const save = async () => {
+        if (!diffPayload) return;
+        setSaving(true);
+        setError(null);
+        setOkMsg(null);
+        try {
+            const res = await fetch("/admin/config", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(diffPayload),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            setOkMsg("Reload triggered");
+            await load();
+        } catch (e: any) {
+            setError(e.message || String(e));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const reload = async () => {
+        setReloading(true);
+        setError(null);
+        setOkMsg(null);
+        try {
+            const res = await fetch("/admin/reload", { method: "POST" });
+            if (!res.ok) throw new Error(await res.text());
+            setOkMsg("Reload triggered");
+        } catch (e: any) {
+            setError(e.message || String(e));
+        } finally {
+            setReloading(false);
+        }
+    };
+    const restoreDefaults = async () => {
+        if (!window.confirm("确认要恢复初始设置吗？这将清除所有运行时覆盖。")) return;
+        setResetting(true);
+        setError(null);
+        setOkMsg(null);
+        try {
+            const res = await fetch("/admin/config/replace", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({}),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            setOkMsg("Reload triggered");
+            await load();
+        } catch (e) {
+            const err = e as any;
+            setError(err?.message || String(e));
+        } finally {
+            setResetting(false);
+        }
+    };
+
+    const resetForm = () => {
+        if (!runtime || !effective) return;
+        setCompatibility(runtime.compatibility ?? effective.compatibility ?? "OPENAI");
+        setModel(runtime.model ?? effective.model ?? "");
+        setToolsMaxLoops(Number(runtime.toolsMaxLoops ?? effective.toolsMaxLoops ?? 2));
+        setBaseUrl(runtime.baseUrl ?? "");
+        setNewApiKey("");
+        setApiKeyMasked(runtime.apiKeyMasked ?? null);
+        setClientTimeoutMs(runtime.clientTimeoutMs ?? effective.clientTimeoutMs ?? "");
+        setStreamTimeoutMs(runtime.streamTimeoutMs ?? effective.streamTimeoutMs ?? "");
+        setToolToggles(runtime.toolToggles ?? {});
+    };
+
+    // toggles 杈呭姪
+    const addToggle = () => {
+        const name = prompt("杈撳叆宸ュ叿鍚嶏紙function name锛?");
+        if (!name) return;
+        setToolToggles(prev => ({ ...prev, [name]: true }));
+    };
+    const removeToggle = (k: string) => {
+        const next = { ...(toolToggles || {}) };
+        delete next[k];
+        setToolToggles(next);
+    };
+
+    return (
+        <div className="min-h-screen w-full bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+            {/* Header */}
+            <header className="sticky top-0 z-10 border-b bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60
+                         dark:border-slate-800 dark:bg-slate-900/80 dark:supports-[backdrop-filter]:bg-slate-900/60">
+                <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-2xl bg-gradient-to-tr from-blue-500 to-indigo-500 text-white grid place-items-center shadow-sm">
+                            <Wrench size={18} />
+                        </div>
+                        <div>
+                            <h1 className="text-lg font-semibold leading-tight">Javelin 绠＄悊鎺у埗鍙?/h1>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">杩愯鏃堕厤缃?路 鐑洿鏂?路 瀹夊叏鎵撶爜</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={reload}
+                            disabled={reloading}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50
+                         disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                            title="瑙﹀彂涓€娆?Reload 骞挎挱"
+                        >
+                            <RefreshCw size={16} /> {reloading ? "閲嶈浇涓€? : "閲嶈浇"}
+                        </button>
+                        <button
+                            onClick={load}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50
+                         dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                            title="鍒锋柊閰嶇疆"
+                        >
+                            <Rocket size={16} /> 鍒锋柊
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            {/* Body */}
+            <main className="mx-auto max-w-6xl px-4 py-6">
+                {/* 鐘舵€佹潯 */}
+                <div className="space-y-2 mb-4">
+                    {loading && (<Banner icon={<RefreshCw className="animate-spin" size={16} />} text="姝ｅ湪鍔犺浇閰嶇疆鈥? color="slate" />)}
+                    {error && <Banner icon={<ShieldCheck size={16} />} text={error} color="red" />}
+                    {okMsg && <Banner icon={<Wand2 size={16} />} text={okMsg} color="green" />}
+                </div>
+
+                {/* 蹇収 */}
+                {effective && (
+                    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mb-6 grid gap-4 md:grid-cols-2">
+                        <Card title="瀹為檯鐢熸晥 (effective)">
+                            <Snap k="compatibility" v={effective.compatibility} />
+                            <Snap k="model" v={effective.model} />
+                            <Snap k="toolsMaxLoops" v={String(effective.toolsMaxLoops)} />
+                            <Snap k="clientTimeoutMs" v={String(effective.clientTimeoutMs ?? "-")} />
+                            <Snap k="streamTimeoutMs" v={String(effective.streamTimeoutMs ?? "-")} />
+                            <Snap k="baseUrl" v={effective.baseUrl ?? "-"} />
+                            <Snap k="apiKeyMasked" v={effective.apiKeyMasked ?? "-"} />
+                        </Card>
+                        <Card title="瑕嗙洊灞?(runtime)">
+                            <Snap k="compatibility" v={runtime?.compatibility ?? "-"} />
+                            <Snap k="model" v={runtime?.model ?? "-"} />
+                            <Snap k="toolsMaxLoops" v={String(runtime?.toolsMaxLoops ?? "-")} />
+                            <Snap k="baseUrl" v={runtime?.baseUrl ?? "-"} />
+                            <Snap k="apiKeyMasked" v={runtime?.apiKeyMasked ?? "-"} />
+                            <Snap k="clientTimeoutMs" v={String(runtime?.clientTimeoutMs ?? "-")} />
+                            <Snap k="streamTimeoutMs" v={String(runtime?.streamTimeoutMs ?? "-")} />
+                        </Card>
+                    </motion.div>
+                )}
+
+                {/* 琛ㄥ崟 */}
+                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                            className="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <Section title="鍩虹璁剧疆">
+                        <div className="grid gap-4 md:grid-cols-3">
+                            <Field label="鍏煎妯″紡 (compatibility)">
+                                <select
+                                    value={compatibility}
+                                    onChange={(e) => setCompatibility(e.target.value)}
+                                    className="w-full rounded-xl border border-slate-300 bg-white p-2 text-slate-900
+                             dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                >
+                                    <option value="OPENAI">OPENAI</option>
+                                    <option value="OLLAMA">OLLAMA</option>
+                                </select>
+                            </Field>
+                            <Field label="妯″瀷鍚?(model)">
+                                <input
+                                    value={model}
+                                    onChange={(e) => setModel(e.target.value)}
+                                    placeholder="qwen3:8b / gpt-4o-mini / ..."
+                                    className="w-full rounded-xl border border-slate-300 bg-white p-2 text-slate-900 placeholder-slate-400
+                             dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-400"
+                                />
+                            </Field>
+                            <Field label="宸ュ叿寰幆涓婇檺 (toolsMaxLoops)">
+                                <input
+                                    type="number"
+                                    value={toolsMaxLoops}
+                                    onChange={(e) => setToolsMaxLoops(Number(e.target.value))}
+                                    className="w-full rounded-xl border border-slate-300 bg-white p-2 text-slate-900
+                             dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                />
+                            </Field>
+                        </div>
+                    </Section>
+
+                    <Section title="缃戠粶涓庤秴鏃讹紙鍙€夎鐩栵級">
+                        <div className="grid gap-4 md:grid-cols-3">
+                            <Field label="Base URL (瑕嗙洊)">
+                                <div className="relative">
+                                    <input
+                                        value={baseUrl}
+                                        onChange={(e) => setBaseUrl(e.target.value)}
+                                        className="w-full rounded-xl border border-slate-300 bg-white p-2 pr-9 text-slate-900
+                               dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                    />
+                                    <Link className="absolute right-2 top-2.5 text-slate-400" size={18} />
+                                </div>
+                            </Field>
+                            <Field label="鏂?API Key (涓嶄細鏄剧ず鏃у€?">
+                                <div className="relative">
+                                    <input
+                                        value={newApiKey}
+                                        onChange={(e) => setNewApiKey(e.target.value)}
+                                        placeholder={apiKeyMasked ? `褰撳墠锛?{apiKeyMasked}` : "鏈缃?}
+                                        className="w-full rounded-xl border border-slate-300 bg-white p-2 pr-9 text-slate-900 placeholder-slate-400
+                               dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-400"
+                                    />
+                                    <KeyRound className="absolute right-2 top-2.5 text-slate-400" size={18} />
+                                </div>
+                            </Field>
+                            <div className="grid grid-cols-2 gap-4">
+                                <Field label="clientTimeoutMs">
+                                    <div className="relative">
+                                        <input
+                                            type="number"
+                                            value={clientTimeoutMs as any}
+                                            onChange={(e) => setClientTimeoutMs(e.target.value === "" ? "" : Number(e.target.value))}
+                                            className="w-full rounded-xl border border-slate-300 bg-white p-2 pr-9 text-slate-900
+                                 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                        />
+                                        <Timer className="absolute right-2 top-2.5 text-slate-400" size={18} />
+                                    </div>
+                                </Field>
+                                <Field label="streamTimeoutMs">
+                                    <div className="relative">
+                                        <input
+                                            type="number"
+                                            value={streamTimeoutMs as any}
+                                            onChange={(e) => setStreamTimeoutMs(e.target.value === "" ? "" : Number(e.target.value))}
+                                            className="w-full rounded-xl border border-slate-300 bg-white p-2 pr-9 text-slate-900
+                                 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                                        />
+                                        <Timer className="absolute right-2 top-2.5 text-slate-400" size={18} />
+                                    </div>
+                                </Field>
+                            </div>
+                        </div>
+                    </Section>
+
+                    <Section title="宸ュ叿寮€鍏?(toolToggles)">
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={addToggle}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50
+                             dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                                >
+                                    <Plus size={16} /> 鏂板
+                                </button>
+                                <span className="text-xs text-slate-500 dark:text-slate-400">鏈厤缃殑榛樿鍚敤(true)銆?/span>
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-2">
+                                {Object.keys(toolToggles).length === 0 && (
+                                    <div className="text-sm text-slate-500 dark:text-slate-400">锛堟殏鏃犳樉寮忓紑鍏筹級</div>
+                                )}
+                                {Object.entries(toolToggles).map(([k, v]) => (
+                                    <div key={k} className="flex items-center justify-between rounded-xl border p-3
+                                          border-slate-200 dark:border-slate-700">
+                                        <div className="font-mono text-sm break-words pr-4">{k}</div>
+                                        <div className="flex items-center gap-3">
+                                            <label className="text-sm flex items-center gap-1">
+                                                <input
+                                                    type="checkbox"
+                                                    className="accent-blue-600 dark:accent-blue-400"
+                                                    checked={!!v}
+                                                    onChange={(e) => setToolToggles({ ...toolToggles, [k]: e.target.checked })}
+                                                />
+                                                鍚敤
+                                            </label>
+                                            <button
+                                                onClick={() => removeToggle(k)}
+                                                className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline dark:text-red-400"
+                                            >
+                                                <Trash2 size={14} /> 鍒犻櫎
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </Section>
+
+                    {/* 鎿嶄綔鍖?*/}
+                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                        <button
+                            onClick={save}
+                            disabled={saving || !diffPayload}
+                            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
+                ${saving || !diffPayload
+                                ? "bg-slate-300 text-white dark:bg-slate-700"
+                                : "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"}`}
+                        >
+                            <Save size={16} /> {saving ? "淇濆瓨涓€? : "淇濆瓨閰嶇疆"}
+                        </button>
+                        <button
+                            onClick={resetForm}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50
+                         dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                        >
+                            <RefreshCw size={16} /> 鎾ら攢鏈繚瀛樻洿鏀?
+                        </button>
+                        <button
+                        <button
+                            onClick={restoreDefaults}
+                            disabled={resetting}
+                            className="inline-flex items-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2 text-sm text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-slate-800 dark:text-red-300 dark:hover:bg-red-900/30 disabled:opacity-60"
+                        >
+                            <Trash2 size={16} /> {resetting ? "恢复中…" : "恢复初始设置"}
+                        </button>
+                            onClick={() => setShowDiff(!showDiff)}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50
+                         dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                        >
+                            {showDiff ? <EyeOff size={16} /> : <Eye size={16} />} {showDiff ? "闅愯棌鍙樻洿" : "鏌ョ湅灏嗘彁浜ょ殑鍙樻洿"}
+                        </button>
+                        {diffPayload && (
+                            <span className="text-xs text-slate-500 dark:text-slate-400 self-center">
+                灏嗘彁浜? {Object.keys(diffPayload).join(", ") || "<鏃?"}
+              </span>
+                        )}
+                    </div>
+
+                    {showDiff && (
+                        <motion.pre
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="mt-4 rounded-xl bg-slate-900 text-slate-100 p-4 overflow-auto text-xs dark:bg-black"
+                        >
+                            {JSON.stringify(diffPayload, null, 2)}
+                        </motion.pre>
+                    )}
+                </motion.div>
+            </main>
+        </div>
+    );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <div className="py-4">
+            <div className="mb-3 text-sm font-medium text-slate-700 dark:text-slate-200">{title}</div>
+            {children}
+        </div>
+    );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <label className="block text-sm">
+            <div className="mb-1 text-slate-500 dark:text-slate-400">{label}</div>
+            {children}
+        </label>
+    );
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <div className="rounded-2xl border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-3 text-sm font-medium text-slate-700 dark:text-slate-200">{title}</div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">{children}</div>
+        </div>
+    );
+}
+
+function Snap({ k, v }: { k: string; v: any }) {
+    return (
+        <div className="rounded-xl border bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800">
+            <div className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">{k}</div>
+            <div className="font-medium break-words">{String(v ?? "-")}</div>
+        </div>
+    );
+}
+
+function Banner({ icon, text, color }: { icon: React.ReactNode; text: string; color: "slate" | "green" | "red" }) {
+    const tone =
+        color === "green"
+            ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-900"
+            : color === "red"
+                ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-900"
+                : "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-800";
+    return (
+        <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${tone}`}>
+            {icon}
+            <span>{text}</span>
+        </div>
+    );
+}
+

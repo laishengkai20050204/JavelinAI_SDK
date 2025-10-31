@@ -5,14 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.function.FunctionCallback;
-import org.springframework.ai.ollama.OllamaChatModel;
-import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.beans.factory.ObjectProvider;
+
+
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
+
 import org.springframework.ai.model.function.FunctionCallingOptions;
 
 import java.util.Collections;
@@ -40,25 +40,6 @@ public class SpringAiConfig {
     public SpringAiConfig(AiProperties properties, SpringAiToolAdapter toolAdapter) {
         this.properties = properties;
         this.toolAdapter = toolAdapter;
-    }
-
-    @Bean
-    @Primary
-    public ChatModel routingChatModel(
-            ObjectProvider<OpenAiChatModel> openAiChatModelProvider,
-            ObjectProvider<OllamaChatModel> ollamaChatModelProvider) {
-        AiProperties.Mode mode = properties.getMode();
-        log.info("Configuring Spring AI chat model for mode={}", mode);
-        return switch (mode) {
-            case OPENAI -> openAiChatModelProvider.getIfAvailable(() -> {
-                throw new IllegalStateException("OpenAI mode selected but OpenAiChatModel bean is missing. " +
-                        "Ensure spring-ai-openai starter is on the classpath and configured.");
-            });
-            case OLLAMA -> ollamaChatModelProvider.getIfAvailable(() -> {
-                throw new IllegalStateException("Ollama mode selected but OllamaChatModel bean is missing. " +
-                        "Ensure spring-ai-ollama starter is on the classpath and configured.");
-            });
-        };
     }
 
     @Bean

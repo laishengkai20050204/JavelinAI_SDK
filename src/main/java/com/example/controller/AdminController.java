@@ -27,31 +27,34 @@ public class AdminController {
     public Map<String, Object> get() {
         var rc = cfgSvc.view();
 
-        // runtime：仅显示覆盖层（apiKey 只打码，不返回原文）
         Map<String,Object> runtime = new LinkedHashMap<>();
-        runtime.put("compatibility", rc.getCompatibility());
-        runtime.put("model", rc.getModel());
-        runtime.put("toolsMaxLoops", rc.getToolsMaxLoops());
-        runtime.put("toolToggles", rc.getToolToggles());
-        runtime.put("baseUrl", rc.getBaseUrl());
-        runtime.put("apiKeyMasked", mask(rc.getApiKey()));   // ★ 只返回打码
+        runtime.put("compatibility",   rc.getCompatibility());
+        runtime.put("model",           rc.getModel());
+        runtime.put("toolsMaxLoops",   rc.getToolsMaxLoops());
+        runtime.put("toolToggles",     rc.getToolToggles());
+        runtime.put("baseUrl",         rc.getBaseUrl());
+        runtime.put("apiKeyMasked",    mask(rc.getApiKey()));   // 已打码 ✅
         runtime.put("clientTimeoutMs", rc.getClientTimeoutMs());
         runtime.put("streamTimeoutMs", rc.getStreamTimeoutMs());
 
-        // effective：展示“实际生效”的值（运行时覆盖不为空则用覆盖，否则用静态配置）
         Map<String,Object> effective = new LinkedHashMap<>();
-        effective.put("compatibility", effectiveProps.mode().name());
-        effective.put("model", effectiveProps.model());
-        effective.put("toolsMaxLoops", effectiveProps.toolsMaxLoops());
+        effective.put("compatibility",   effectiveProps.mode().name());
+        effective.put("model",           effectiveProps.model());
+        effective.put("toolsMaxLoops",   effectiveProps.toolsMaxLoops());
         effective.put("clientTimeoutMs", effectiveProps.clientTimeoutMs());
         effective.put("streamTimeoutMs", effectiveProps.streamTimeoutMs());
+        // ★ 新增：把“真实生效”的 baseUrl & apiKey（打码）也回显
+        effective.put("baseUrl",         effectiveProps.baseUrl());
+        effective.put("apiKeyMasked",    mask(effectiveProps.apiKey()));
 
-        // ===== 日志 =====
         log.info("[ADMIN][GET]/config runtime: compat={} model={} loops={} baseUrl={} apiKeyMasked={} cTimeout={} sTimeout={}",
                 runtime.get("compatibility"), runtime.get("model"), runtime.get("toolsMaxLoops"),
                 runtime.get("baseUrl"), runtime.get("apiKeyMasked"),
                 runtime.get("clientTimeoutMs"), runtime.get("streamTimeoutMs"));
-        log.debug("[ADMIN][GET]/config effective: {}", effective);
+        log.info("[ADMIN][GET]/config effective: compat={} model={} loops={} baseUrl={} apiKeyMasked={} cTimeout={} sTimeout={}",
+                effective.get("compatibility"), effective.get("model"), effective.get("toolsMaxLoops"),
+                effective.get("baseUrl"),      effective.get("apiKeyMasked"),
+                effective.get("clientTimeoutMs"), effective.get("streamTimeoutMs"));
 
         return Map.of("runtime", runtime, "effective", effective);
     }

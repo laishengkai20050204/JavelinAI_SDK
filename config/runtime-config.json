@@ -1,10 +1,10 @@
 {
-  "compatibility" : "OPENAI",
-  "model" : "qwen3:8b",
-  "toolsMaxLoops" : 10,
+  "compatibility" : null,
+  "model" : null,
+  "toolsMaxLoops" : 2,
   "toolToggles" : { },
   "baseUrl" : null,
   "apiKey" : null,
-  "clientTimeoutMs" : 180000,
-  "streamTimeoutMs" : 240000
+  "clientTimeoutMs" : null,
+  "streamTimeoutMs" : null
 }

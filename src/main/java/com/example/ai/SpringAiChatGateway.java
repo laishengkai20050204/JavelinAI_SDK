@@ -64,28 +64,28 @@ public class SpringAiChatGateway {
     private String executeCall(Map<String, Object> payload, AiProperties.Mode mode) {
         Prompt prompt = toPrompt(payload, mode);
 
-        // 请求预览（日志 + 对象）
+        // 请求预览（日�?+ 对象�?
         ObjectNode reqPreview = logOutgoingPayloadJson(prompt, payload, mode);
 
-        // 调模型
+        // 调模�?
         ChatResponse response = chatModel.call(prompt);
 
-        // 响应元信息 + 决策日志
+        // 响应元信�?+ 决策日志
         if (log.isDebugEnabled()) {
-            logIncomingRawJson(response);      // usage / rate limit 等
-            logAssistantDecision(response);    // 把 tool_calls 打出来
+            logIncomingRawJson(response);      // usage / rate limit �?
+            logAssistantDecision(response);    // �?tool_calls 打出�?
         }
 
         // 归一化为你现有的网关返回
         String out = formatResponse(response, mode);
 
-        // （仅调试时）把 请求预览 / 原生元信息 / 助手决策 一起塞回 JSON
+        // （仅调试时）�?请求预览 / 原生元信�?/ 助手决策 一起塞�?JSON
         if (log.isDebugEnabled()) {
             try {
                 ObjectNode root = (ObjectNode) mapper.readTree(out);
                 root.set("_provider_request", reqPreview);
                 root.set("_provider_raw", mapper.valueToTree(extractProviderRaw(response)));
-                root.set("_provider_assistant", buildAssistantDecisionNode(response)); // ← 就放这里
+                root.set("_provider_assistant", buildAssistantDecisionNode(response)); // �?就放这里
                 out = mapper.writeValueAsString(root);
             } catch (Exception ignore) {}
         }
@@ -119,10 +119,10 @@ public class SpringAiChatGateway {
         // --- 新增：若上游已扁平化，则跳过 structured 插入 ---
         boolean flattened = "true".equalsIgnoreCase(String.valueOf(payload.get("_flattened")));
 
-        // —— 铅封校验 #1：如果 flattened=true 但 m3 与 seal 不同，说明 Decision→Gateway 之间有人改了
+        // —�?铅封校验 #1：如�?flattened=true �?m3 �?seal 不同，说�?Decision→Gateway 之间有人改了
         if (flattened && seal != null && !seal.isBlank() && !seal.equals(m3Digest)) {
             log.error("[TRACE M3] TAMPER between Decision and Gateway: seal={} m3={}", seal, m3Digest);
-            // 可选：抛异常来抓堆栈
+            // 可选：抛异常来抓堆�?
             // throw new IllegalStateException("Messages tampered before toPrompt()");
         }
 
@@ -146,7 +146,7 @@ public class SpringAiChatGateway {
                 log.debug("[AI-REQ:STRUCTURED] inserted={} atIndex={}", structuredMsgs.size(), insertAt);
             }
         }
-        // M4: 出参（已经 map 成 Spring AI 的 Message 对象，方便对比数量）
+        // M4: 出参（已�?map �?Spring AI �?Message 对象，方便对比数量）
         log.debug("[TRACE M4] gateway.out size={} last={}",
                 messages.size(),
                 (messages.isEmpty() ? "<empty>" : messages.get(messages.size()-1)));
@@ -162,7 +162,7 @@ public class SpringAiChatGateway {
 
         if (!log.isDebugEnabled()) return mapper.createObjectNode();
 
-        ObjectNode preview = buildOutgoingPayloadPreview(prompt, originalPayload, mode); // ← 把你现有方法体抽出来
+        ObjectNode preview = buildOutgoingPayloadPreview(prompt, originalPayload, mode); // �?把你现有方法体抽出来
         try {
             log.debug("[AI-REQ] {}", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(preview));
         } catch (Exception ignore) {}
@@ -177,7 +177,7 @@ public class SpringAiChatGateway {
 
         // model
 //        Object model = originalPayload.getOrDefault("model", properties.getModel());
-        // ★ 请求级覆盖模型名：
+        // �?请求级覆盖模型名�?
         String modelFromPayload = coerceString(originalPayload.get("model"));
         String model = StringUtils.hasText(modelFromPayload) ? modelFromPayload : effectiveProps.model();
         if (StringUtils.hasText(model)) {
@@ -249,7 +249,7 @@ public class SpringAiChatGateway {
         // ====== tools ======
         ArrayNode tools = root.putArray("tools");
 
-        // 1) 先拿请求体定义（tools + clientTools）
+        // 1) 先拿请求体定义（tools + clientTools�?
         List<ToolDef> toolDefs = parseAllToolDefs(originalPayload);
 
         String normalizedToolChoice = normalizeToolChoice(rawToolChoice);
@@ -259,15 +259,15 @@ public class SpringAiChatGateway {
         // 为了避免重复
         Set<String> added = new LinkedHashSet<>();
 
-        // 1.1 请求体里的定义（如果在 allowed 里才展示）
+        // 1.1 请求体里的定义（如果�?allowed 里才展示�?
         for (ToolDef def : toolDefs) {
             if (!allowed.isEmpty() && !allowed.contains(def.name())) continue;
             appendToolNode(tools, def.name(), def.desc(), def.schema(), def.execTarget());
             added.add(def.name());
         }
 
-        // 2) 回落到“服务器注册”的工具（FunctionCallback）
-        //    ——如果用户没有在 payload 里显式给 schema，就从回调里取 schema/desc
+        // 2) 回落到“服务器注册”的工具（FunctionCallback�?
+        //    ——如果用户没有在 payload 里显式给 schema，就从回调里�?schema/desc
         for (FunctionCallback cb : toolAdapter.functionCallbacks()) {
             String name = cb.getName();
             if (!allowed.isEmpty() && !allowed.contains(name)) continue;
@@ -287,7 +287,7 @@ public class SpringAiChatGateway {
             try { root.put("temperature", Double.parseDouble(str)); } catch (NumberFormatException ignored) {}
         }
 
-        AiProperties.Mode effMode = effectiveProps.mode(); // 或 modeOr(mode)
+        AiProperties.Mode effMode = effectiveProps.mode(); // �?modeOr(mode)
         root.put("compatibility", effMode.toString());
         return root;
     }
@@ -306,13 +306,13 @@ public class SpringAiChatGateway {
 
     private JsonNode safeParseSchema(String schemaStr) {
         if (!org.springframework.util.StringUtils.hasText(schemaStr)) {
-            // 默认空 schema：一个空对象
+            // 默认�?schema：一个空对象
             return mapper.createObjectNode().put("type", "object");
         }
         try {
             return mapper.readTree(schemaStr);
         } catch (Exception e) {
-            // 解析失败也给个兜底
+            // 解析失败也给个兜�?
             return mapper.createObjectNode().put("type", "object");
         }
     }
@@ -377,9 +377,9 @@ public class SpringAiChatGateway {
 //        if (hasClientTools) {
 //            builder.proxyToolCalls(Boolean.TRUE);   // 外部化（v2 用）
 //        } else {
-//            builder.proxyToolCalls(Boolean.FALSE);  // 内部执行（/ai/decide 用）
+//            builder.proxyToolCalls(Boolean.FALSE);  // 内部执行�?ai/decide 用）
 //        }
-        // 始终外部化 tool-calls：模型只“提出调用”，真正执行由你的编排完成
+        // 始终外部�?tool-calls：模型只“提出调用”，真正执行由你的编排完�?
         builder.proxyToolCalls(Boolean.TRUE);
 
         List<FunctionCallback> allCallbacks = new ArrayList<>(serverCallbacks.size() + clientDefCallbacks.size());
@@ -390,7 +390,7 @@ public class SpringAiChatGateway {
         builder.functions(allowed);
 
         if (!allowed.isEmpty()) {
-            // ✅ 稳定起见，禁用并行工具
+            // �?稳定起见，禁用并行工�?
             builder.parallelToolCalls(Boolean.FALSE);
         }
 
@@ -425,7 +425,7 @@ public class SpringAiChatGateway {
             return forced;
         }
 
-        // 3) 并集策略：请求声明的函数 ∪ 服务端已注册的全部工具
+        // 3) 并集策略：请求声明的函数 �?服务端已注册的全部工�?
         LinkedHashSet<String> allowed = new LinkedHashSet<>();
         for (ToolDef def : defs) {
             if (StringUtils.hasText(def.name())) allowed.add(def.name());
@@ -527,16 +527,16 @@ public class SpringAiChatGateway {
             String id   = asString(source.get("tool_call_id"));
             String name = asString(source.get("name"));
 
-            // 先拿 content 字段（按你的设计应是 DB 的 content 列）
+            // 先拿 content 字段（按你的设计应是 DB �?content 列）
             String data = normalizeContent(source.get("content"));
 
-            // ★ 兜底：如果 content 为空，再从 payload/data.payload.value 等常见位置提取
+            // �?兜底：如�?content 为空，再�?payload/data.payload.value 等常见位置提�?
             if (!org.springframework.util.StringUtils.hasText(data)) {
-                Object payload = source.get("payload");               // 你存进 DB 的 payload（JSON）
+                Object payload = source.get("payload");               // 你存�?DB �?payload（JSON�?
                 if (payload instanceof Map<?,?> pm) {
                     // 典型结构：{ data: { payload: { type:"text", value:"..." }, _executedKey: "..." }, ... }
                     Object dataObj = pm.get("data");
-                    Map<?,?> dataMap = (dataObj instanceof Map<?,?> dm) ? dm : pm; // 有的直接是 payload
+                    Map<?,?> dataMap = (dataObj instanceof Map<?,?> dm) ? dm : pm; // 有的直接�?payload
                     Object inner = dataMap.get("payload");
                     if (inner instanceof Map<?,?> im) {
                         Object v = im.get("value");
@@ -616,7 +616,7 @@ public class SpringAiChatGateway {
 
         choice.put("finish_reason", "stop");
 
-        // 👇 可选：把 provider 原始信息塞进返回，方便前端/你直接看到“原生”
+        // 👇 可选：�?provider 原始信息塞进返回，方便前�?你直接看到“原生�?
         if (properties.getDebug() != null && properties.getDebug().isIncludeRawInGatewayJson()) {
             Map<String, Object> raw = extractProviderRaw(response);
             if (!raw.isEmpty()) {
@@ -843,7 +843,7 @@ public class SpringAiChatGateway {
         if (data == null) return "";
         if (data instanceof String s) return s;
         if (data instanceof Map<?, ?> m) {
-            // 优先取 data.payload.value
+            // 优先�?data.payload.value
             Object payload = m.get("payload");
             if (payload instanceof Map<?, ?> pm) {
                 Object v = pm.get("value");
@@ -876,10 +876,10 @@ public class SpringAiChatGateway {
         for (int i = messages.size() - 1; i >= 0; i--) {
             Message m = messages.get(i);
             if (m instanceof UserMessage) {
-                return i; // 把 structured 插到这条 user 之前
+                return i; // �?structured 插到这条 user 之前
             }
         }
-        return -1; // 没有 user，就追加到末尾
+        return -1; // 没有 user，就追加到末�?
     }
 
     @Nullable

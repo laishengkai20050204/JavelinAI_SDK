@@ -11,23 +11,28 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 @RequiredArgsConstructor
 public class RuntimeConfigService {
-    private final AiProperties props;                 // 作为默认值来源
+    private final ConfigStore store;
+    private final AiProperties props;
     private final ApplicationEventPublisher publisher;
     private final AtomicReference<RuntimeConfig> ref = new AtomicReference<>();
 
     @PostConstruct
     void init() {
-        String compat = null;
-        try {
-            // 你的 AiProperties 里若有 getCompatibility()（枚举），转成字符串
-            compat = (props.getCompatibility() != null) ? props.getMode().name() : null;
-        } catch (Throwable ignore) {}
+        RuntimeConfig persisted = null;
+        try { persisted = store.loadOrNull(); } catch (Throwable ignore) {}
+
+        if (persisted != null) {
+            ref.set(persisted);
+            return;
+        }
+
         RuntimeConfig init = RuntimeConfig.builder()
-                .compatibility(compat)
+                .compatibility(null)
                 .model(props.getModel())
                 .toolsMaxLoops(props.getTools() != null ? props.getTools().getMaxLoops() : 2)
                 .clientTimeoutMs(props.getClient() != null ? props.getClient().getTimeoutMs() : null)
                 .streamTimeoutMs(props.getClient() != null ? props.getClient().getStreamTimeoutMs() : null)
+                .baseUrl(props.getBaseUrl())
                 .build();
         ref.set(init);
     }
