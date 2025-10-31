@@ -7,7 +7,8 @@
     "find_relevant_memory" : false,
     "get_server_time" : false,
     "python_exec" : false,
-    "web_fetch" : false
+    "web_fetch" : false,
+    "web_search" : true
   },
   "baseUrl" : "http://localhost:11434",
   "apiKey" : null,

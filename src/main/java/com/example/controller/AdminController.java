@@ -86,7 +86,7 @@ public class AdminController {
                 .compatibility( compat )
                 .model(           coalesce(in.getModel(),           old.getModel()))
                 .toolsMaxLoops(   coalesce(in.getToolsMaxLoops(),   old.getToolsMaxLoops()))
-                .toolToggles(     coalesce(in.getToolToggles(),     old.getToolToggles()))
+                .toolToggles(     coalesceNonEmpty(in.getToolToggles(), old.getToolToggles()))
                 // 下方几个按需保留：如果你目前不打算运行时重建 WebClient，可先不暴露/不合并
                 .baseUrl(         coalesce(in.getBaseUrl(),         old.getBaseUrl()))
                 .apiKey(          coalesce(in.getApiKey(),          old.getApiKey()))
@@ -141,6 +141,12 @@ public class AdminController {
     }
 
     private static <T> T coalesce(T v, T fallback) { return v != null ? v : fallback; }
+
+    private static <K,V> Map<K,V> coalesceNonEmpty(Map<K,V> v, Map<K,V> fallback) {
+        if (v == null) return fallback;
+        if (v.isEmpty()) return fallback;
+        return v;
+    }
 
     private static String normalizeCompat(String in, String fallback) {
         if (in == null || in.isBlank()) return fallback;

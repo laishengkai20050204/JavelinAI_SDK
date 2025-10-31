@@ -1,6 +1,9 @@
 package com.example.tools;
 
+import com.example.ai.tools.SpringAiToolAdapter;
 import com.example.config.EffectiveProps;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -20,8 +23,9 @@ public class ToolRegistry {
     private final List<Map<String, Object>> openAiToolsSchemaCached;
     private final List<Map<String, Object>> openAiServerToolsSchemaCached;
     private final EffectiveProps props;
+    private final ObjectMapper mapper;
 
-    public ToolRegistry(List<AiTool> toolBeans, EffectiveProps props) {
+    public ToolRegistry(List<AiTool> toolBeans, EffectiveProps props, ObjectMapper mapper) {
         log.debug("Initializing ToolRegistry with {} tool bean(s)", toolBeans.size());
 
         // 1) 装载 + 校验
@@ -59,6 +63,7 @@ public class ToolRegistry {
         this.openAiToolsSchemaCached = Collections.unmodifiableList(buildOpenAiToolsSchema(false));
         this.openAiServerToolsSchemaCached = Collections.unmodifiableList(buildOpenAiToolsSchema(true));
         this.props = props;
+        this.mapper = mapper;
     }
 
     public Optional<AiTool> get(String name) {
@@ -128,4 +133,5 @@ public class ToolRegistry {
         wrapper.put("function", function);
         return wrapper;
     }
+
 }

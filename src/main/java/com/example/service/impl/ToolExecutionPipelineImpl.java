@@ -2,6 +2,7 @@ package com.example.service.impl;
 
 import com.example.api.dto.ToolCall;
 import com.example.config.AiProperties;
+import com.example.config.EffectiveProps;
 import com.example.service.ToolExecutionPipeline;
 import com.example.tools.AiToolExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,10 +27,13 @@ public class ToolExecutionPipelineImpl implements ToolExecutionPipeline {
     private final Cache<String, ToolExecResult> cache;
     private final AiToolExecutor aiToolExecutor; // 复用你已有的执行器（已接 ToolRegistry / 去重账本等）
     private final ObjectMapper mapper;
+    private final EffectiveProps effectiveProps; // ★ 新增
 
-    public ToolExecutionPipelineImpl(AiToolExecutor executor, ObjectMapper mapper, AiProperties props) {
+    public ToolExecutionPipelineImpl(AiToolExecutor executor, ObjectMapper mapper, AiProperties props,
+                                     EffectiveProps effectiveProps) {
         this.aiToolExecutor = executor;
         this.mapper = mapper;
+        this.effectiveProps = effectiveProps;
 
         long ttlMinutes =  props != null && props.getTools() != null && props.getTools().getCallStep() != null
                 ? Math.max(1, props.getTools().getCallStep().getTtlMinutes())
@@ -56,6 +60,14 @@ public class ToolExecutionPipelineImpl implements ToolExecutionPipeline {
     @Override
     public Mono<ToolExecResult> execute(ToolCall call, String userId, String conversationId) {
         return Mono.fromCallable(() -> {
+
+            // ★★★ 新增：运行时禁用检查
+            Map<String, Boolean> toggles = effectiveProps.toolToggles();
+            if (toggles != null && !toggles.getOrDefault(call.name(), true)) {
+                // 抛异常即可，SinglePathChatService.execPending() 里 onErrorResume 会转成 ToolResult.error(...)
+                throw new IllegalStateException("DISABLED: tool disabled by runtime config");
+            }
+
             // ---- 兜底空参 ----
             Map<String, Object> args = call.arguments() == null
                     ? java.util.Collections.emptyMap()

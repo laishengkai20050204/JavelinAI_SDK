@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
     Save,
@@ -12,7 +12,6 @@ import {
     Wrench,
     Eye,
     EyeOff,
-    Plus,
     Trash2,
     Languages
 } from "lucide-react";
@@ -21,7 +20,7 @@ import {
  * AdminConfigConsole — bilingual (ZH / EN), improved layout
  * Tailwind: darkMode:'media'
  * Endpoints:
- *  GET  /admin/config         -> { runtime:{...}, effective:{...} }
+ *  GET  /admin/config         -> { runtime:{...}, effective:{...}, availableTools?: string[] }
  *  PUT  /admin/config         -> merge semantics
  *  POST /admin/reload
  */
@@ -40,49 +39,49 @@ export default function AdminConfigConsole() {
     const locales = {
         zh: {
             title: "Javelin 配置控制台",
-            subtitle: "运行时覆盖 · 生效配置 · 安全管理",
+            subtitle: "运行时覆盖 · 生效配置 · 安全",
             actions: {
                 reload: "重载",
-                reloading: "重载中...",
+                reloading: "正在重载...",
                 refresh: "刷新",
-                save: "保存配置",
-                saving: "保存中...",
-                revert: "撤销未保存更改",
+                save: "保存",
+                saving: "正在保存...",
+                revert: "撤销未保存",
                 restore: "恢复默认",
-                restoring: "恢复中...",
-                diffOpen: "查看将要提交的 Diff",
-                diffClose: "关闭 Diff",
+                restoring: "正在恢复...",
+                diffOpen: "查看待提交 Diff",
+                diffClose: "收起 Diff",
                 willSubmit: "将提交",
             },
             banners: {
                 loading: "正在加载配置",
                 saved: "已保存配置",
-                reloaded: "已触发 Reload",
+                reloaded: "已触发重载",
                 restored: "已恢复为默认配置",
             },
             sections: {
                 snapshots: {
-                    effective: "实际生效 (effective)",
-                    runtime: "覆盖（runtime）",
+                    effective: "生效配置 (effective)",
+                    runtime: "运行时覆盖 (runtime)",
                 },
                 basics: "基础设置",
-                network: "网络与超时（可选覆盖）",
+                network: "网络 & 超时（可选覆盖）",
                 toggles: "工具开关 (toolToggles)",
-                none: "（暂无显式开关）",
-                defaultOn: "未配置的默认启用 (true)",
+                none: "（尚未声明任何开关）",
+                defaultOn: "未声明的工具默认启用（true）",
                 enable: "启用",
             },
             fields: {
                 compatibility: "兼容模式 (compatibility)",
-                model: "模型（model）",
-                loops: "工具循环上限 (toolsMaxLoops)",
+                model: "模型 (model)",
+                loops: "最大工具循环次数 (toolsMaxLoops)",
                 baseUrl: "Base URL（覆盖）",
-                newKey: "新 API Key（不会显示旧值）",
+                newKey: "新的 API Key（旧值已隐藏）",
                 clientTimeout: "clientTimeoutMs",
                 streamTimeout: "streamTimeoutMs",
             },
             tooltips: {
-                reload: "触发一次 Reload 广播",
+                reload: "广播一次重载",
                 refresh: "刷新配置",
             },
             placeholders: {
@@ -210,11 +209,13 @@ export default function AdminConfigConsole() {
         }
     };
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => {
+        load();
+    }, []);
 
     // ===== diff =====
     const diffPayload = useMemo(() => {
-        if (!runtime) return null;
+        if (!runtime) return null as any;
         const payload: any = {};
         const push = (k: string, v: any, cur: any) => {
             if (v === "") return; // empty string means "do not override"
@@ -239,13 +240,19 @@ export default function AdminConfigConsole() {
             runtime.streamTimeoutMs ?? undefined
         );
         if (newApiKey && newApiKey.trim().length > 0) payload.apiKey = newApiKey.trim();
-        if (JSON.stringify(toolToggles || {}) !== JSON.stringify(runtime.toolToggles || {})) payload.toolToggles = toolToggles;
+        if (JSON.stringify(toolToggles || {}) !== JSON.stringify(runtime.toolToggles || {}))
+            payload.toolToggles = toolToggles;
         return payload;
     }, [runtime, compatibility, model, toolsMaxLoops, baseUrl, clientTimeoutMs, streamTimeoutMs, newApiKey, toolToggles]);
 
+    const isDiffEmpty = useMemo(
+        () => !diffPayload || Object.keys(diffPayload as any).length === 0,
+        [diffPayload]
+    );
+
     // ===== actions =====
     const save = async () => {
-        if (!diffPayload) return;
+        if (!diffPayload || Object.keys(diffPayload as any).length === 0) return;
         setSaving(true);
         setError(null);
         setOkMsg(null);
@@ -316,7 +323,7 @@ export default function AdminConfigConsole() {
 
     // toggles helpers
     const addToggle = () => {
-        const name = prompt(lang === "zh" ? "输入工具名（function name）" : "Tool name (function name)");
+        const name = prompt(lang === "zh" ? "请输入工具名（function name）" : "Tool name (function name)");
         if (!name) return;
         setToolToggles((prev) => ({ ...prev, [name]: true }));
     };
@@ -381,9 +388,11 @@ export default function AdminConfigConsole() {
 
             {/* Body */}
             <main className="mx-auto max-w-6xl px-4 py-6">
-                {/* 状态条 */}
+                {/* banners */}
                 <div className="mb-4 space-y-2">
-                    {loading && (<Banner icon={<RefreshCw className="animate-spin" size={16} />} text={t.banners.loading} color="slate" />)}
+                    {loading && (
+                        <Banner icon={<RefreshCw className="animate-spin" size={16} />} text={t.banners.loading} color="slate" />
+                    )}
                     {error && <Banner icon={<ShieldCheck size={16} />} text={error} color="red" />}
                     {okMsg && <Banner icon={<Wand2 size={16} />} text={okMsg} color="green" />}
                 </div>
@@ -510,7 +519,14 @@ export default function AdminConfigConsole() {
                                     {availableTools.map((name) => {
                                         const checked = toolToggles[name] !== undefined ? !!toolToggles[name] : true;
                                         return (
-                                            <label key={name} className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm cursor-pointer select-none ${checked ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-200' : 'bg-white border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200'}`}>
+                                            <label
+                                                key={name}
+                                                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm cursor-pointer select-none ${
+                                                    checked
+                                                        ? "bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-200"
+                                                        : "bg-white border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200"
+                                                }`}
+                                            >
                                                 <input
                                                     type="checkbox"
                                                     className="accent-blue-600 dark:accent-blue-400"
@@ -530,9 +546,9 @@ export default function AdminConfigConsole() {
                     <div className="mt-5 md:sticky md:bottom-4 md:z-10 md:backdrop-blur md:bg-white/70 md:dark:bg-slate-900/70 md:rounded-2xl md:border md:border-slate-200 md:dark:border-slate-800 md:p-3 flex flex-wrap items-center gap-3">
                         <button
                             onClick={save}
-                            disabled={saving || !diffPayload}
+                            disabled={saving || isDiffEmpty}
                             className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium ${
-                                saving || !diffPayload
+                                saving || isDiffEmpty
                                     ? "bg-slate-300 text-white dark:bg-slate-700"
                                     : "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400"
                             }`}
@@ -560,7 +576,7 @@ export default function AdminConfigConsole() {
                         </button>
                         {diffPayload && (
                             <span className="text-xs text-slate-500 dark:text-slate-400 self-center">
-                {t.actions.willSubmit}: {Object.keys(diffPayload).join(", ") || (lang === "zh" ? "<空>" : "<none>")}
+                {t.actions.willSubmit}: {Object.keys(diffPayload).join(", ") || (lang === "zh" ? "<无>" : "<none>")}
               </span>
                         )}
                     </div>
