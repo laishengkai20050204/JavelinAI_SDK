@@ -1,7 +1,7 @@
 {
   "compatibility" : "OPENAI",
   "model" : "qwen3:8b",
-  "toolsMaxLoops" : 10,
+  "toolsMaxLoops" : 2,
   "toolToggles" : { },
   "baseUrl" : "http://localhost:11434",
   "apiKey" : null,
