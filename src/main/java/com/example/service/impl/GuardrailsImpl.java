@@ -2,12 +2,18 @@ package com.example.service.impl;
 
 import com.example.api.dto.StepState;
 import com.example.service.Guardrails;
-import org.springframework.beans.factory.annotation.Value;
+import com.example.config.EffectiveProps;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 @Service
+@RequiredArgsConstructor
 public class GuardrailsImpl implements Guardrails {
-    @Value("${ai.tools.max-loops:2}")
-    private int maxLoops;
-    @Override public boolean reachedMaxLoops(StepState st) { return st.loop() >= maxLoops; }
+    private final EffectiveProps props;
+
+    @Override
+    public boolean reachedMaxLoops(StepState st) {
+        int max = Math.max(1, props.toolsMaxLoops());
+        return st.loop() >= max;
+    }
 }

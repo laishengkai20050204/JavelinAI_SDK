@@ -2,6 +2,7 @@ package com.example.ai;
 
 import com.example.config.AiProperties;
 import com.example.ai.tools.SpringAiToolAdapter;
+import com.example.config.EffectiveProps;
 import com.example.service.impl.StepContextStore;
 import com.example.util.MsgTrace;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -48,6 +49,7 @@ public class SpringAiChatGateway {
     private final ObjectMapper mapper;
     private final AiProperties properties;
     private final StepContextStore stepStore; // 新增
+    private final EffectiveProps effectiveProps;
 
     public Mono<String> call(Map<String, Object> payload, AiProperties.Mode mode) {
         return Mono.fromCallable(() -> executeCall(payload, mode))
@@ -174,8 +176,13 @@ public class SpringAiChatGateway {
         ObjectNode root = mapper.createObjectNode();
 
         // model
-        Object model = originalPayload.getOrDefault("model", properties.getModel());
-        if (model != null) root.put("model", String.valueOf(model));
+//        Object model = originalPayload.getOrDefault("model", properties.getModel());
+        // ★ 请求级覆盖模型名：
+        String modelFromPayload = coerceString(originalPayload.get("model"));
+        String model = StringUtils.hasText(modelFromPayload) ? modelFromPayload : effectiveProps.model();
+        if (StringUtils.hasText(model)) {
+            root.put("model", model);
+        }
 
         // tool_choice
         Object rawToolChoice = originalPayload.containsKey("toolChoice")
@@ -280,7 +287,8 @@ public class SpringAiChatGateway {
             try { root.put("temperature", Double.parseDouble(str)); } catch (NumberFormatException ignored) {}
         }
 
-        root.put("compatibility", mode.toString());
+        AiProperties.Mode effMode = effectiveProps.mode(); // 或 modeOr(mode)
+        root.put("compatibility", effMode.toString());
         return root;
     }
 
@@ -332,12 +340,16 @@ public class SpringAiChatGateway {
     }
 
     private FunctionCallingOptions buildOptions(Map<String, Object> payload, AiProperties.Mode mode) {
-        OptionsBuilder builder = mode == AiProperties.Mode.OPENAI
+        AiProperties.Mode effMode = effectiveProps.modeOr(mode);
+        OptionsBuilder builder = (effMode == AiProperties.Mode.OPENAI)
                 ? new OpenAiOptionsBuilder(OpenAiChatOptions.builder())
                 : new GenericOptionsBuilder(FunctionCallingOptions.builder());
 
-        Object model = payload.getOrDefault("model", properties.getModel());
-        if (model != null) builder.model(model.toString());
+        String modelFromPayload = coerceString(payload.get("model"));
+        String effectiveModel = StringUtils.hasText(modelFromPayload) ? modelFromPayload : effectiveProps.model();
+        if (StringUtils.hasText(effectiveModel)) {
+            builder.model(effectiveModel);
+        }
 
         Object temperature = payload.get("temperature");
         if (temperature instanceof Number number) {
@@ -870,7 +882,16 @@ public class SpringAiChatGateway {
         return -1; // 没有 user，就追加到末尾
     }
 
-
+    @Nullable
+    private String coerceString(Object v) {
+        if (v == null) return null;
+        if (v instanceof JsonNode node) {
+            if (node.isNull() || node.isMissingNode()) return null;
+            return node.asText(); // 非文本也会转成字符串
+        }
+        String s = v.toString();
+        return (s == null || s.isBlank()) ? null : s;
+    }
 
 
 }

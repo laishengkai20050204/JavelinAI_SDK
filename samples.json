@@ -1,6 +1,14 @@
 [
   {
     "userId": "u1",
+    "conversationId": "c1",
+    "q": "你好",
+    "toolChoice": "auto",
+    "responseMode": "step-json-ndjson",
+    "clientTools": []
+  },
+  {
+    "userId": "u1",
     "conversationId": "c2",
     "q": "帮我打开百度主页",
     "toolChoice": "auto",

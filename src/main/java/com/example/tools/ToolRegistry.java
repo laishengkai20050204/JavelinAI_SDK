@@ -1,5 +1,6 @@
 package com.example.tools;
 
+import com.example.config.EffectiveProps;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -18,8 +19,9 @@ public class ToolRegistry {
     // 可选：把导出结构做成只读缓存（构造完成后不再变更）
     private final List<Map<String, Object>> openAiToolsSchemaCached;
     private final List<Map<String, Object>> openAiServerToolsSchemaCached;
+    private final EffectiveProps props;
 
-    public ToolRegistry(List<AiTool> toolBeans) {
+    public ToolRegistry(List<AiTool> toolBeans, EffectiveProps props) {
         log.debug("Initializing ToolRegistry with {} tool bean(s)", toolBeans.size());
 
         // 1) 装载 + 校验
@@ -56,6 +58,7 @@ public class ToolRegistry {
         // 2) 可选缓存：一次生成，后续复用（如果你未来支持动态增删工具，再改成懒加载或失效重建）
         this.openAiToolsSchemaCached = Collections.unmodifiableList(buildOpenAiToolsSchema(false));
         this.openAiServerToolsSchemaCached = Collections.unmodifiableList(buildOpenAiToolsSchema(true));
+        this.props = props;
     }
 
     public Optional<AiTool> get(String name) {
