@@ -73,7 +73,7 @@ public class EffectiveProps {
     public int toolsMaxLoops() {
         var r = rc();
         if (r != null && r.getToolsMaxLoops() != null && r.getToolsMaxLoops() > 0) return r.getToolsMaxLoops();
-        return (statics.getTools() != null ? statics.getTools().getMaxLoops() : 2);
+        return (statics.getTools() != null ? statics.getTools().getMaxLoops() : 10);
     }
 
     public Map<String, Boolean> toolToggles() {

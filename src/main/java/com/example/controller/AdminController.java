@@ -80,63 +80,68 @@ public class AdminController {
     }
 
     @Operation(summary = "修改配置（合并语义：只更新传入的字段）")
-    @PutMapping(value = "/config", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> put(@RequestBody RuntimeConfig in) throws Exception {
-        // ===== 入参概要（安全）=====
-        boolean hasNewApiKey = in.getApiKey() != null && !in.getApiKey().isBlank();
-        log.info("[ADMIN][PUT]/config incoming: compat={} model={} loops={} baseUrl={} apiKeyProvided={} cTimeout={} sTimeout={} togglesKeys={}",
-                in.getCompatibility(), in.getModel(), in.getToolsMaxLoops(), safeBaseUrl(in.getBaseUrl()),
-                hasNewApiKey, in.getClientTimeoutMs(), in.getStreamTimeoutMs(),
-                (in.getToolToggles() != null ? in.getToolToggles().keySet() : "[]"));
-
+    @PutMapping(value="/config", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Map<String,Object> put(@RequestBody Map<String,Object> body) throws Exception {
         RuntimeConfig old = cfgSvc.view();
 
-        // 规范化模式（OPENAI/OLLAMA）
-        String compat = normalizeCompat(in.getCompatibility(), old.getCompatibility());
+        // —— presence 语义：区分“没传字段”与“传了但为空对象 {}”
+        boolean togglesPresent = body.containsKey("toolToggles");
+        @SuppressWarnings("unchecked")
+        Map<String,Object> rawToggles = togglesPresent ? (Map<String,Object>) body.get("toolToggles") : null;
+        Map<String,Boolean> incomingToggles =
+                togglesPresent ? safeToBoolMap(rawToggles) : null;
+
+        String compat = normalizeCompat(getString(body, "compatibility"), old.getCompatibility());
+
+        Map<String,Boolean> mergedToggles =
+                togglesPresent
+                        ? (incomingToggles == null ? Map.of() : incomingToggles)   // 显式传入 → 覆盖（{}=清空覆盖）
+                        : (old.getToolToggles() == null ? Map.of() : old.getToolToggles()); // 未传 → 保留旧值
 
         RuntimeConfig merged = RuntimeConfig.builder()
-                .compatibility(compat)
-                .model(coalesce(in.getModel(), old.getModel()))
-                .toolsMaxLoops(coalesce(in.getToolsMaxLoops(), old.getToolsMaxLoops()))
-                .toolToggles(coalesceNonEmpty(in.getToolToggles(), old.getToolToggles()))
-                // 若当前不重建下游客户端，也可以先不暴露这几项；这里保持你的原逻辑
-                .baseUrl(coalesce(in.getBaseUrl(), old.getBaseUrl()))
-                .apiKey(coalesce(in.getApiKey(), old.getApiKey()))
-                .clientTimeoutMs(coalesce(in.getClientTimeoutMs(), old.getClientTimeoutMs()))
-                .streamTimeoutMs(coalesce(in.getStreamTimeoutMs(), old.getStreamTimeoutMs()))
+                .compatibility( compat )
+                .model(           coalesce(getString(body,"model"),            old.getModel()))
+                .toolsMaxLoops(   coalesce(getInt(body,"toolsMaxLoops"),       old.getToolsMaxLoops()))
+                .toolToggles(     mergedToggles)
+                .baseUrl(         coalesce(getString(body,"baseUrl"),          old.getBaseUrl()))
+                .apiKey(          coalesce(getString(body,"apiKey"),           old.getApiKey()))
+                .clientTimeoutMs( coalesce(getLong(body,"clientTimeoutMs"),    old.getClientTimeoutMs()))
+                .streamTimeoutMs( coalesce(getLong(body,"streamTimeoutMs"),    old.getStreamTimeoutMs()))
                 .build();
+
+        // 日志（可选）
+        log.info("[ADMIN][PUT]/config incoming: togglesPresent={}", togglesPresent);
+        log.info("[ADMIN][PUT]/config applied: loops={} togglesKeys={}",
+                merged.getToolsMaxLoops(), merged.getToolToggles().keySet());
 
         store.save(merged);
         cfgSvc.update(merged);
-
-        // ✅ 日志开关变化：新增禁用 / 取消禁用 / 当前禁用集
-        logToggleDiff(old.getToolToggles(), merged.getToolToggles());
-
-        // 结果概要（安全）
-        log.info("[ADMIN][PUT]/config applied: compat={} model={} loops={} baseUrl={} apiKeyMasked={} cTimeout={} sTimeout={} togglesKeys={}",
-                merged.getCompatibility(), merged.getModel(), merged.getToolsMaxLoops(), safeBaseUrl(merged.getBaseUrl()),
-                mask(merged.getApiKey()), merged.getClientTimeoutMs(), merged.getStreamTimeoutMs(),
-                (merged.getToolToggles() != null ? merged.getToolToggles().keySet() : "[]"));
-
-        // 详细 debug（安全版，不打印明文 key）
-        // 替换原来的：var safeMerged = Map.of( ... );
-        var safeMerged = new java.util.LinkedHashMap<String, Object>();
-        safePut(safeMerged, "compat",          merged.getCompatibility());
-        safePut(safeMerged, "model",           merged.getModel());
-        safePut(safeMerged, "toolsMaxLoops",   merged.getToolsMaxLoops());
-        safePut(safeMerged, "baseUrl",         safeBaseUrl(merged.getBaseUrl())); // 可能为 null
-        safePut(safeMerged, "apiKeyMasked",    mask(merged.getApiKey()));         // 可能为 null
-        safePut(safeMerged, "clientTimeoutMs", merged.getClientTimeoutMs());      // 可能为 null
-        safePut(safeMerged, "streamTimeoutMs", merged.getStreamTimeoutMs());      // 可能为 null
-        // toggleKeys 我们保证有值（至少是空集）
-        safeMerged.put("toggleKeys",
-                merged.getToolToggles() != null ? merged.getToolToggles().keySet() : java.util.Set.of());
-
-        log.debug("[ADMIN][PUT]/config merged(safe): {}", safeMerged);
-
-
         return Map.of("ok", true);
     }
+
+    private static String getString(Map<String,Object> m, String k) {
+        Object v = m.get(k); return v == null ? null : String.valueOf(v);
+    }
+    private static Integer getInt(Map<String,Object> m, String k) {
+        Object v = m.get(k); if (v == null) return null;
+        return (v instanceof Number) ? ((Number)v).intValue() : Integer.valueOf(String.valueOf(v));
+    }
+    private static Long getLong(Map<String,Object> m, String k) {
+        Object v = m.get(k); if (v == null) return null;
+        return (v instanceof Number) ? ((Number)v).longValue() : Long.valueOf(String.valueOf(v));
+    }
+    private static Map<String,Boolean> safeToBoolMap(Map<String,Object> src) {
+        if (src == null || src.isEmpty()) return Map.of();
+        Map<String,Boolean> out = new LinkedHashMap<>();
+        for (var e : src.entrySet()) {
+            if (e.getKey() == null) continue;
+            Object v = e.getValue();
+            boolean b = (v instanceof Boolean) ? (Boolean)v : Boolean.parseBoolean(String.valueOf(v));
+            out.put(e.getKey(), b);
+        }
+        return out;
+    }
+
 
     private static void safePut(Map<String, Object> m, String k, Object v) {
         if (v != null) m.put(k, v);
@@ -181,6 +186,11 @@ public class AdminController {
     }
 
     // ===== helpers =====
+
+    private static <K,V> Map<K,V> coalesceMap(Map<K,V> v, Map<K,V> fallback) {
+        return (v != null) ? v : fallback;  // 允许空Map；null 才用旧值
+    }
+
 
     private static <T> T coalesce(T v, T fallback) {
         return v != null ? v : fallback;

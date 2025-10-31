@@ -21,7 +21,7 @@ public class RuntimeConfig {
 
     /** 工具循环上限（默认 2；用于 Guardrails） */
     @Builder.Default
-    private Integer toolsMaxLoops = 2;
+    private Integer toolsMaxLoops = 10;
 
     /** （可选）工具开关：key=工具名，value=true 启用 */
     @Builder.Default

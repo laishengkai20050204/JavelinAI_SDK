@@ -1,13 +1,8 @@
 {
   "compatibility" : "OPENAI",
   "model" : "qwen3:8b",
-  "toolsMaxLoops" : 2,
-  "toolToggles" : {
-    "web_search" : false,
-    "debug_tool" : false,
-    "get_server_time" : false,
-    "python_exec" : false
-  },
+  "toolsMaxLoops" : 10,
+  "toolToggles" : { },
   "baseUrl" : "http://localhost:11434",
   "apiKey" : null,
   "clientTimeoutMs" : 180000,

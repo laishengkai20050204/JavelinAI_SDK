@@ -1,24 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
-    Save,
-    RefreshCw,
-    Wand2,
-    Rocket,
-    ShieldCheck,
-    KeyRound,
-    Link,
-    Timer,
-    Wrench,
-    Eye,
-    EyeOff,
-    Trash2,
-    Languages,
-    Plus
+    Save, RefreshCw, Wand2, Rocket, ShieldCheck, KeyRound, Link, Timer,
+    Wrench, Eye, EyeOff, Trash2, Languages
 } from "lucide-react";
 
 /**
- * AdminConfigConsole — bilingual (ZH / EN) with tri‑state tool toggles (Default/On/Off)
+ * AdminConfigConsole — ZH/EN, simple ON/OFF tool toggles
  * Tailwind: darkMode:'media'
  * Endpoints:
  *  GET  /admin/config         -> { runtime:{...}, effective:{...}, availableTools?: string[] }
@@ -61,16 +49,12 @@ export default function AdminConfigConsole() {
                 restored: "已恢复为默认配置",
             },
             sections: {
-                snapshots: {
-                    effective: "生效配置 (effective)",
-                    runtime: "运行时覆盖 (runtime)",
-                },
+                snapshots: { effective: "生效配置 (effective)", runtime: "运行时覆盖 (runtime)" },
                 basics: "基础设置",
                 network: "网络 & 超时（可选覆盖）",
                 toggles: "工具开关 (toolToggles)",
                 none: "（尚未声明任何开关）",
                 defaultOn: "未声明的工具默认启用（true）",
-                enable: "启用",
             },
             fields: {
                 compatibility: "兼容模式 (compatibility)",
@@ -81,25 +65,14 @@ export default function AdminConfigConsole() {
                 clientTimeout: "clientTimeoutMs",
                 streamTimeout: "streamTimeoutMs",
             },
-            tooltips: {
-                reload: "广播一次重载",
-                refresh: "刷新配置",
-            },
+            tooltips: { reload: "广播一次重载", refresh: "刷新配置" },
             placeholders: {
                 model: "qwen2:7b / gpt-4o-mini / ...",
                 keyUnset: "未设置",
                 keyMask: (m: string) => `当前：${m}`,
-                addName: "新增开关的工具名（function name）",
             },
-            confirm: {
-                restore: "恢复默认？这将清空所有运行时覆盖。",
-            },
-            tristate: {
-                default: "默认",
-                on: "开",
-                off: "关",
-            },
-            addOverride: "新增覆盖",
+            confirm: { restore: "恢复默认？这将清空所有运行时覆盖。" },
+            on: "开", off: "关",
         },
         en: {
             title: "Javelin Config Console",
@@ -124,16 +97,12 @@ export default function AdminConfigConsole() {
                 restored: "Restored to defaults",
             },
             sections: {
-                snapshots: {
-                    effective: "Effective",
-                    runtime: "Runtime Overrides",
-                },
+                snapshots: { effective: "Effective", runtime: "Runtime Overrides" },
                 basics: "Basics",
                 network: "Network & Timeouts (optional overrides)",
                 toggles: "Tool Toggles (toolToggles)",
                 none: "(No explicit toggles yet)",
                 defaultOn: "Unspecified tools default to enabled (true)",
-                enable: "Enable",
             },
             fields: {
                 compatibility: "Compatibility",
@@ -144,25 +113,14 @@ export default function AdminConfigConsole() {
                 clientTimeout: "clientTimeoutMs",
                 streamTimeout: "streamTimeoutMs",
             },
-            tooltips: {
-                reload: "Broadcast a reload",
-                refresh: "Refresh config",
-            },
+            tooltips: { reload: "Broadcast a reload", refresh: "Refresh config" },
             placeholders: {
                 model: "qwen2:7b / gpt-4o-mini / ...",
                 keyUnset: "Not set",
                 keyMask: (m: string) => `Current: ${m}`,
-                addName: "Tool name (function name)",
             },
-            confirm: {
-                restore: "Restore defaults? This will clear all runtime overrides.",
-            },
-            tristate: {
-                default: "Default",
-                on: "On",
-                off: "Off",
-            },
-            addOverride: "Add override",
+            confirm: { restore: "Restore defaults? This will clear all runtime overrides." },
+            on: "On", off: "Off",
         },
     } as const;
 
@@ -183,21 +141,21 @@ export default function AdminConfigConsole() {
     // form
     const [compatibility, setCompatibility] = useState<string>("OPENAI");
     const [model, setModel] = useState<string>("");
-    const [toolsMaxLoops, setToolsMaxLoops] = useState<number>(10);
+    const [toolsMaxLoops, setToolsMaxLoops] = useState<number>(10); // 默认 10
     const [baseUrl, setBaseUrl] = useState<string>("");
     const [newApiKey, setNewApiKey] = useState<string>("");
     const [apiKeyMasked, setApiKeyMasked] = useState<string | null>(null);
     const [clientTimeoutMs, setClientTimeoutMs] = useState<number | "">("");
     const [streamTimeoutMs, setStreamTimeoutMs] = useState<number | "">("");
+    // 这里保存“覆盖”表：仅当工具被禁用时才有 { name:false }
     const [toolToggles, setToolToggles] = useState<Record<string, boolean>>({});
     const [availableTools, setAvailableTools] = useState<string[]>([]);
     const [showDiff, setShowDiff] = useState<boolean>(false);
-    const [newToggleName, setNewToggleName] = useState<string>("");
 
     // ===== constants/helpers =====
     const DEFAULT_ENABLED = true;
     const normalizeToggles = (obj: Record<string, boolean>) =>
-        Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== DEFAULT_ENABLED));
+        Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== DEFAULT_ENABLED)); // 仅保留与默认不同的覆盖
 
     // ===== load =====
     const load = async () => {
@@ -222,8 +180,8 @@ export default function AdminConfigConsole() {
             setNewApiKey("");
             setClientTimeoutMs(r.clientTimeoutMs ?? e.clientTimeoutMs ?? "");
             setStreamTimeoutMs(r.streamTimeoutMs ?? e.streamTimeoutMs ?? "");
+            // runtime.toolToggles 是“覆盖”，一般只有 false
             setToolToggles(r.toolToggles ?? {});
-            setNewToggleName("");
         } catch (e: any) {
             setError(e?.message || String(e));
         } finally {
@@ -231,9 +189,7 @@ export default function AdminConfigConsole() {
         }
     };
 
-    useEffect(() => {
-        load();
-    }, []);
+    useEffect(() => { load(); }, []);
 
     // ===== derived =====
     const toolNames = useMemo(() => {
@@ -247,31 +203,29 @@ export default function AdminConfigConsole() {
         if (!runtime) return null as any;
         const payload: any = {};
         const push = (k: string, v: any, cur: any) => {
-            if (v === "") return; // empty string means "do not override"
+            if (v === "") return; // 空串视为“不覆盖”
             if (JSON.stringify(v) !== JSON.stringify(cur)) payload[k] = v;
         };
         push("compatibility", compatibility || undefined, runtime.compatibility ?? undefined);
         push("model", model || undefined, runtime.model ?? undefined);
-        push(
-            "toolsMaxLoops",
+        push("toolsMaxLoops",
             Number.isFinite(Number(toolsMaxLoops)) ? Number(toolsMaxLoops) : undefined,
             runtime.toolsMaxLoops ?? undefined
         );
         push("baseUrl", baseUrl || undefined, runtime.baseUrl ?? undefined);
-        push(
-            "clientTimeoutMs",
+        push("clientTimeoutMs",
             clientTimeoutMs === "" ? undefined : Number(clientTimeoutMs),
             runtime.clientTimeoutMs ?? undefined
         );
-        push(
-            "streamTimeoutMs",
+        push("streamTimeoutMs",
             streamTimeoutMs === "" ? undefined : Number(streamTimeoutMs),
             runtime.streamTimeoutMs ?? undefined
         );
-        // 只持久化与默认不同的覆盖（默认 true）
+
+        // 仅发送与默认不同的覆盖（false），开(=true)则不发该键
         const normalized = normalizeToggles(toolToggles || {});
         if (JSON.stringify(normalized) !== JSON.stringify(runtime.toolToggles ?? {})) {
-            payload.toolToggles = normalized;
+            payload.toolToggles = normalized; // 可能为 {}
         }
         if (newApiKey && newApiKey.trim().length > 0) payload.apiKey = newApiKey.trim();
         return payload;
@@ -341,14 +295,13 @@ export default function AdminConfigConsole() {
         if (!runtime || !effective) return;
         setCompatibility(runtime.compatibility ?? effective.compatibility ?? "OPENAI");
         setModel(runtime.model ?? effective.model ?? "");
-        setToolsMaxLoops(Number(runtime.toolsMaxLoops ?? effective.toolsMaxLoops ?? 2));
+        setToolsMaxLoops(Number(runtime.toolsMaxLoops ?? effective.toolsMaxLoops ?? 10));
         setBaseUrl(runtime.baseUrl ?? effective.baseUrl ?? "");
         setNewApiKey("");
         setApiKeyMasked(runtime.apiKeyMasked ?? effective.apiKeyMasked ?? null);
         setClientTimeoutMs(runtime.clientTimeoutMs ?? effective.clientTimeoutMs ?? "");
         setStreamTimeoutMs(runtime.streamTimeoutMs ?? effective.streamTimeoutMs ?? "");
-        setToolToggles(runtime.toolToggles ?? {});
-        setNewToggleName("");
+        setToolToggles(runtime.toolToggles ?? {}); // 覆盖表
     };
 
     // ===== UI =====
@@ -408,9 +361,7 @@ export default function AdminConfigConsole() {
             <main className="mx-auto max-w-6xl px-4 py-6">
                 {/* banners */}
                 <div className="mb-4 space-y-2">
-                    {loading && (
-                        <Banner icon={<RefreshCw className="animate-spin" size={16} />} text={t.banners.loading} color="slate" />
-                    )}
+                    {loading && (<Banner icon={<RefreshCw className="animate-spin" size={16} />} text={t.banners.loading} color="slate" />)}
                     {error && <Banner icon={<ShieldCheck size={16} />} text={error} color="red" />}
                     {okMsg && <Banner icon={<Wand2 size={16} />} text={okMsg} color="green" />}
                 </div>
@@ -467,8 +418,7 @@ export default function AdminConfigConsole() {
                             </Field>
                             <Field label={t.fields.loops}>
                                 <input
-                                    type="number"
-                                    min={0}
+                                    type="number" min={0}
                                     value={toolsMaxLoops}
                                     onChange={(e) => setToolsMaxLoops(Number(e.target.value))}
                                     className="w-full rounded-xl border border-slate-300 bg-white p-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -494,7 +444,11 @@ export default function AdminConfigConsole() {
                                     <input
                                         value={newApiKey}
                                         onChange={(e) => setNewApiKey(e.target.value)}
-                                        placeholder={apiKeyMasked ? (lang === "zh" ? locales.zh.placeholders.keyMask(apiKeyMasked) : locales.en.placeholders.keyMask(apiKeyMasked)) : (lang === "zh" ? locales.zh.placeholders.keyUnset : locales.en.placeholders.keyUnset)}
+                                        placeholder={
+                                            apiKeyMasked
+                                                ? (lang === "zh" ? locales.zh.placeholders.keyMask(apiKeyMasked) : locales.en.placeholders.keyMask(apiKeyMasked))
+                                                : (lang === "zh" ? locales.zh.placeholders.keyUnset : locales.en.placeholders.keyUnset)
+                                        }
                                         className="w-full rounded-xl border border-slate-300 bg-white p-2 pr-9 text-slate-900 placeholder-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-400"
                                     />
                                     <KeyRound className="absolute right-2 top-2.5 text-slate-400" size={18} />
@@ -529,79 +483,46 @@ export default function AdminConfigConsole() {
 
                     <Section title={t.sections.toggles}>
                         <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                                <div className="text-xs text-slate-500 dark:text-slate-400">{t.sections.defaultOn}</div>
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        value={newToggleName}
-                                        onChange={(e) => setNewToggleName(e.target.value)}
-                                        placeholder={t.placeholders.addName}
-                                        className="w-48 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 placeholder-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-400"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const name = newToggleName.trim();
-                                            if (!name) return;
-                                            setToolToggles((prev) => ({ ...prev, [name]: false })); // 默认加一条禁用更安全
-                                            setNewToggleName("");
-                                        }}
-                                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-                                    >
-                                        <Plus size={14} /> {t.addOverride}
-                                    </button>
-                                </div>
-                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">{t.sections.defaultOn}</div>
 
                             {toolNames.length === 0 ? (
                                 <div className="text-sm text-slate-500 dark:text-slate-400">{t.sections.none}</div>
                             ) : (
                                 <div className="flex flex-wrap gap-2">
                                     {toolNames.map((name) => {
-                                        const has = Object.prototype.hasOwnProperty.call(toolToggles, name);
-                                        const state: TriState = has ? (toolToggles[name] ? "on" : "off") : "default";
+                                        const enabled = toolToggles[name] !== false; // 未声明 => 启用
                                         return (
-                                            <div
+                                            <label
                                                 key={name}
-                                                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm ${
-                                                    state === "off"
-                                                        ? "bg-white border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200"
-                                                        : state === "on"
-                                                            ? "bg-green-50 border-green-300 text-green-700 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-200"
-                                                            : "bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-200"
+                                                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm cursor-pointer select-none ${
+                                                    enabled
+                                                        ? "bg-green-50 border-green-300 text-green-700 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-200"
+                                                        : "bg-white border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200"
                                                 }`}
-                                                title={`${name}`}
+                                                title={name}
                                             >
-                                                <span className="font-mono">{name}</span>
-                                                <TriStateToggle
-                                                    lang={lang}
-                                                    value={state}
-                                                    onChange={(nv) => {
+                                                <input
+                                                    type="checkbox"
+                                                    className="accent-blue-600 dark:accent-blue-400"
+                                                    checked={enabled}
+                                                    onChange={(e) => {
+                                                        const nextChecked = e.target.checked;
                                                         setToolToggles((prev) => {
-                                                            const next = { ...prev } as Record<string, boolean>;
-                                                            if (nv === "default") delete next[name];
-                                                            else next[name] = nv === "on";
+                                                            const next = { ...(prev || {}) } as Record<string, boolean>;
+                                                            if (nextChecked) {
+                                                                // 开：恢复默认 => 删除覆盖键
+                                                                delete next[name];
+                                                            } else {
+                                                                // 关：显式覆盖为 false
+                                                                next[name] = false;
+                                                            }
                                                             return next;
                                                         });
                                                     }}
                                                 />
-                                                {has && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                            setToolToggles((prev) => {
-                                                                const next = { ...prev } as Record<string, boolean>;
-                                                                delete next[name];
-                                                                return next;
-                                                            })
-                                                        }
-                                                        className="ml-1 rounded-md p-0.5 hover:bg-slate-200 dark:hover:bg-slate-700"
-                                                        title={lang === "zh" ? "恢复默认 (true)" : "Back to default (true)"}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
-                                                )}
-                                            </div>
+                                                <span className="font-mono">{name}</span>
+                                                <span className="text-xs opacity-70">{enabled ? (lang === "zh" ? t.on : t.on) : (lang === "zh" ? t.off : t.off)}</span>
+                                            </label>
                                         );
                                     })}
                                 </div>
@@ -659,38 +580,6 @@ export default function AdminConfigConsole() {
                     )}
                 </motion.div>
             </main>
-        </div>
-    );
-}
-
-type TriState = "default" | "on" | "off";
-
-function TriStateToggle({
-                            value,
-                            onChange,
-                            lang,
-                        }: {
-    value: TriState;
-    onChange: (v: TriState) => void;
-    lang: "zh" | "en";
-}) {
-    const labels = lang === "zh" ? { default: "默认", on: "开", off: "关" } : { default: "Default", on: "On", off: "Off" };
-    return (
-        <div className="inline-flex rounded-lg overflow-hidden border border-slate-300 dark:border-slate-700 text-[11px]">
-            {(["default", "on", "off"] as const).map((v) => (
-                <button
-                    key={v}
-                    type="button"
-                    onClick={() => onChange(v)}
-                    className={`px-2 py-1 ${
-                        value === v
-                            ? "bg-blue-600 text-white dark:bg-blue-500"
-                            : "bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                    }`}
-                >
-                    {labels[v]}
-                </button>
-            ))}
         </div>
     );
 }
