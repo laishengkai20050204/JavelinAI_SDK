@@ -1,5 +1,5 @@
 {
-  "compatibility" : "OPENAI",
+  "compatibility" : "OLLAMA",
   "model" : "qwen3:8b",
   "toolsMaxLoops" : 2,
   "toolToggles" : { },

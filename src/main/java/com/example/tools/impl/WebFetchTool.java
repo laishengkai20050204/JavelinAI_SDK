@@ -14,9 +14,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
+import reactor.netty.transport.ProxyProvider;
 
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -24,12 +27,12 @@ import java.time.Duration;
 import java.util.*;
 
 /**
- * web_fetch：抓取 URL 并抽取可读正文，控制长度回灌模型
+ * web_fetch：抓�?URL 并抽取可读正文，控制长度回灌模型
  *
- * 参数：
+ * 参数�?
  *  - url (string, 必填)
  *  - max_chars (int, 默认 props.defaultMaxChars)
- *  - selector (string, 可选；如启用 jsoup 则按 CSS 选择器抽取，否则忽略)
+ *  - selector (string, 可选；如启�?jsoup 则按 CSS 选择器抽取，否则忽略)
  */
 @Slf4j
 @AiToolComponent
@@ -47,16 +50,30 @@ public class WebFetchTool implements AiTool {
     public void init() {
         this.jsoupAvailable = classPresent("org.jsoup.Jsoup");
 
-        // 独立的 WebClient，限制单次内存
+        // 独立�?WebClient，限制单次内�?
         ExchangeStrategies strategies = ExchangeStrategies.builder()
                 .codecs(c -> c.defaultCodecs().maxInMemorySize(props.getMaxInMemoryBytes()))
                 .build();
 
-        this.webClient = webClientBuilder
-                .clone()
+                WebClient.Builder builder = webClientBuilder.clone()
                 .exchangeStrategies(strategies)
-                .defaultHeader("User-Agent", props.getUserAgent())
-                .build();
+                .defaultHeader("User-Agent", props.getUserAgent());
+
+        HttpClient http = HttpClient.create();
+        ProxySpec proxy = readProxyFromEnv();
+        if (proxy != null) {
+            http = http.proxy(spec -> spec
+                    .type(proxy.type)
+                    .host(proxy.host)
+                    .port(proxy.port)
+            );
+            builder.clientConnector(new ReactorClientHttpConnector(http));
+            log.info("[web_fetch] proxy enabled via env: {}://{}:{}", proxy.type.name().toLowerCase(), proxy.host, proxy.port);
+        } else {
+            log.info("[web_fetch] proxy disabled (no HTTP(S)_PROXY env detected)");
+        }
+
+        this.webClient = builder.build();
 
         log.info("[web_fetch] jsoupAvailable={}, timeout={}, maxInMemoryBytes={}",
                 jsoupAvailable, props.getTimeout(), props.getMaxInMemoryBytes());
@@ -94,7 +111,7 @@ public class WebFetchTool implements AiTool {
             maxChars = Math.max(200, Math.min(20000, maxChars));
             String selector = str(args.get("selector"));
 
-            // === 1) 规范化 URL + 基础校验/SSRF 防护 ===
+            // === 1) 规范�?URL + 基础校验/SSRF 防护 ===
             URI uri = normalizeUrl(rawUrl);
             if (!isAllowedScheme(uri)) {
                 return ToolResult.error(null, name(), "Only http/https are allowed.");
@@ -103,7 +120,7 @@ public class WebFetchTool implements AiTool {
                 return ToolResult.error(null, name(), "Target host resolves to a private/loopback address.");
             }
 
-            // 指纹（仅用规范化 URL）
+            // 指纹（仅用规范化 URL�?
             Map<String,Object> fp = Map.of("url", uri.toString());
             JsonNode canonNode = JsonCanonicalizer.normalize(mapper, mapper.valueToTree(fp), java.util.Set.of());
             String canonical = mapper.writeValueAsString(canonNode);
@@ -132,15 +149,15 @@ public class WebFetchTool implements AiTool {
                     .blockOptional()
                     .orElse(new Body(MediaType.TEXT_PLAIN, "", 0));
 
-            if (body.status() >= 400) { // <-- 访问器方法
+            if (body.status() >= 400) { // <-- 访问器方�?
                 String msg = "HTTP " + body.status() + " " +
                         Optional.ofNullable(body.contentType()).orElse(MediaType.TEXT_PLAIN);
                 return ToolResult.error(null, name(), msg);
             }
 
-            // === 3) 抽取标题与正文 ===
+            // === 3) 抽取标题与正�?===
             Extracted ex = jsoupAvailable
-                    ? extractWithJsoup(body.text(), uri.toString(), selector, maxChars) // <-- 访问器方法
+                    ? extractWithJsoup(body.text(), uri.toString(), selector, maxChars) // <-- 访问器方�?
                     : extractLight(body.text(), maxChars);
 
 
@@ -196,7 +213,7 @@ public class WebFetchTool implements AiTool {
         }
     }
 
-    /** 无依赖抽取（去 <script>/<style>，去标签，压缩空白） */
+    /** 无依赖抽取（�?<script>/<style>，去标签，压缩空白） */
     private Extracted extractLight(String html, int maxChars) {
         String title = findBetween(html, "<title>", "</title>");
         String cleaned = html
@@ -218,7 +235,7 @@ public class WebFetchTool implements AiTool {
         String fragmentless = new URI(
                 u.getScheme(), u.getUserInfo(), u.getHost(), u.getPort(), u.getPath(), u.getQuery(), null
         ).toString();
-        // 去常见 utm 参数
+        // 去常�?utm 参数
         try {
             var qp = splitQuery(new URI(fragmentless));
             qp.keySet().removeIf(k -> k.toLowerCase().startsWith("utm_"));
@@ -239,7 +256,7 @@ public class WebFetchTool implements AiTool {
         try {
             String host = u.getHost();
             if (host == null) return true;
-            // IP 字面量
+            // IP 字面�?
             if (host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+") || host.contains(":")) {
                 InetAddress ia = InetAddress.getByName(host);
                 return isBad(ia);
@@ -249,7 +266,7 @@ public class WebFetchTool implements AiTool {
             for (InetAddress ia : arr) if (isBad(ia)) return true;
             return false;
         } catch (Exception e) {
-            return true; // 解析失败视为不安全
+            return true; // 解析失败视为不安�?
         }
     }
 
@@ -261,7 +278,7 @@ public class WebFetchTool implements AiTool {
                 || ia.isMulticastAddress();
     }
 
-    // ======= 小工具 =======
+    // ======= 小工�?=======
 
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }
     private static int intOr(Object o, int d) { try { return o==null?d:Integer.parseInt(String.valueOf(o)); } catch (Exception e){ return d; } }
@@ -338,4 +355,27 @@ public class WebFetchTool implements AiTool {
 
     private record Body(MediaType contentType, String text, int status) {}
     private record Extracted(String title, String excerpt) {}
+    private static class ProxySpec {
+        final ProxyProvider.Proxy type; final String host; final int port;
+        ProxySpec(ProxyProvider.Proxy type, String host, int port) { this.type = type; this.host = host; this.port = port; }
+    }
+
+    private static ProxySpec readProxyFromEnv() {
+        try {
+            String raw = Optional.ofNullable(System.getenv("HTTPS_PROXY")).orElse(System.getenv("HTTP_PROXY"));
+            if (!org.springframework.util.StringUtils.hasText(raw)) return null;
+            String s = raw.trim();
+            URI u = URI.create(s);
+            String scheme = Optional.ofNullable(u.getScheme()).orElse("http").toLowerCase(Locale.ROOT);
+            String host = u.getHost();
+            int port = u.getPort();
+            if (!org.springframework.util.StringUtils.hasText(host) || port <= 0) return null;
+            ProxyProvider.Proxy type = ProxyProvider.Proxy.HTTP;
+            if (scheme.startsWith("socks5")) type = ProxyProvider.Proxy.SOCKS5;
+            else if (scheme.startsWith("socks4")) type = ProxyProvider.Proxy.SOCKS4;
+            return new ProxySpec(type, host, port);
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
 }

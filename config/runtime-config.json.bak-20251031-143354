@@ -1,0 +1,10 @@
+{
+  "compatibility" : null,
+  "model" : null,
+  "toolsMaxLoops" : 2,
+  "toolToggles" : { },
+  "baseUrl" : null,
+  "apiKey" : null,
+  "clientTimeoutMs" : null,
+  "streamTimeoutMs" : null
+}
