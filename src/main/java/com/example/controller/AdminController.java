@@ -4,6 +4,8 @@ import com.example.config.EffectiveProps;
 import com.example.runtime.ConfigStore;
 import com.example.runtime.RuntimeConfig;
 import com.example.runtime.RuntimeConfigService;
+import com.example.tools.ToolRegistry;
+import com.example.tools.AiTool;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,7 @@ public class AdminController {
     private final RuntimeConfigService cfgSvc;
     private final ConfigStore store;
     private final EffectiveProps effectiveProps;
+    private final ToolRegistry toolRegistry;
 
     @Operation(summary = "获取配置")
     @GetMapping(value="/config", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -56,7 +59,12 @@ public class AdminController {
                 effective.get("baseUrl"),      effective.get("apiKeyMasked"),
                 effective.get("clientTimeoutMs"), effective.get("streamTimeoutMs"));
 
-        return Map.of("runtime", runtime, "effective", effective);
+        var toolNames = toolRegistry.allTools().stream().map(AiTool::name).toList();
+        return Map.of(
+                "runtime", runtime,
+                "effective", effective,
+                "availableTools", toolNames
+        );
     }
 
     @Operation(summary = "修改配置（合并语义：只更新传入的字段）")

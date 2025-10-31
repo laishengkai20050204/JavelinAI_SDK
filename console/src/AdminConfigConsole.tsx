@@ -176,6 +176,7 @@ export default function AdminConfigConsole() {
     const [clientTimeoutMs, setClientTimeoutMs] = useState<number | "">("");
     const [streamTimeoutMs, setStreamTimeoutMs] = useState<number | "">("");
     const [toolToggles, setToolToggles] = useState<Record<string, boolean>>({});
+    const [availableTools, setAvailableTools] = useState<string[]>([]);
     const [showDiff, setShowDiff] = useState<boolean>(false);
 
     // ===== load =====
@@ -189,8 +190,10 @@ export default function AdminConfigConsole() {
             const data = await res.json();
             const r = data.runtime ?? {};
             const e = data.effective ?? {};
+            const tools: string[] = Array.isArray(data.availableTools) ? data.availableTools : [];
             setRuntime(r);
             setEffective(e);
+            setAvailableTools(tools);
             setCompatibility(r.compatibility ?? e.compatibility ?? "OPENAI");
             setModel(r.model ?? e.model ?? "");
             setToolsMaxLoops(Number(r.toolsMaxLoops ?? e.toolsMaxLoops ?? 2));
@@ -498,43 +501,28 @@ export default function AdminConfigConsole() {
                     </Section>
 
                     <Section title={t.sections.toggles}>
-                        <div className="space-y-3">
-                            <div className="flex flex-wrap items-center gap-3">
-                                <button
-                                    onClick={addToggle}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
-                                >
-                                    <Plus size={16} /> {lang === "zh" ? "新增" : "Add"}
-                                </button>
-                                <span className="text-xs text-slate-500 dark:text-slate-400">{t.sections.defaultOn}</span>
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-2">
-                                {Object.keys(toolToggles).length === 0 && (
-                                    <div className="text-sm text-slate-500 dark:text-slate-400">{t.sections.none}</div>
-                                )}
-                                {Object.entries(toolToggles).map(([k, v]) => (
-                                    <div key={k} className="flex items-center justify-between rounded-xl border p-3 border-slate-200 dark:border-slate-700">
-                                        <div className="font-mono text-sm break-words pr-4">{k}</div>
-                                        <div className="flex items-center gap-3">
-                                            <label className="text-sm flex items-center gap-1">
+                        <div className="space-y-2">
+                            <div className="text-xs text-slate-500 dark:text-slate-400">{t.sections.defaultOn}</div>
+                            {availableTools.length === 0 ? (
+                                <div className="text-sm text-slate-500 dark:text-slate-400">{t.sections.none}</div>
+                            ) : (
+                                <div className="flex flex-wrap gap-2">
+                                    {availableTools.map((name) => {
+                                        const checked = toolToggles[name] !== undefined ? !!toolToggles[name] : true;
+                                        return (
+                                            <label key={name} className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm cursor-pointer select-none ${checked ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-200' : 'bg-white border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200'}`}>
                                                 <input
                                                     type="checkbox"
                                                     className="accent-blue-600 dark:accent-blue-400"
-                                                    checked={!!v}
-                                                    onChange={(e) => setToolToggles({ ...toolToggles, [k]: e.target.checked })}
+                                                    checked={checked}
+                                                    onChange={(e) => setToolToggles({ ...toolToggles, [name]: e.target.checked })}
                                                 />
-                                                {t.sections.enable}
+                                                <span className="font-mono">{name}</span>
                                             </label>
-                                            <button
-                                                onClick={() => removeToggle(k)}
-                                                className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline dark:text-red-400"
-                                            >
-                                                <Trash2 size={14} /> {lang === "zh" ? "删除" : "Remove"}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                     </Section>
 

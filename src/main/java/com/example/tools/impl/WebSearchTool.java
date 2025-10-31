@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import com.example.tools.support.ProxySupport;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.net.URI;
@@ -117,11 +118,12 @@ public class WebSearchTool implements AiTool {
             String executedKey = name() + "::" + fingerprint;
 
             // === 3) 准备 HTTP 客户端 ===
-            WebClient client = webClientBuilder
+            WebClient.Builder builder = webClientBuilder
                     .clone()
                     .baseUrl(props.getSerper().getBaseUrl())
-                    .defaultHeader("X-API-KEY", Objects.toString(props.getSerper().getApiKey(), ""))
-                    .build();
+                    .defaultHeader("X-API-KEY", Objects.toString(props.getSerper().getApiKey(), ""));
+            builder = ProxySupport.configureWebClientProxyFromEnv(builder, "web_search");
+            WebClient client = builder.build();
 
             Duration timeout = props.getSerper().getTimeout();
 
