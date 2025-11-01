@@ -81,7 +81,7 @@ public class ContinuationServiceImpl implements ContinuationService {
             stepStore.saveToolResults(stepId, results);
 
             // 立刻/收尾转正都可，幂等
-            memoryService.promoteDraftsToFinal(userId, conversationId, stepId);
+//            memoryService.promoteDraftsToFinal(userId, conversationId, stepId);
 
         } catch (Exception e) {
             log.warn("[memory] appendToolResultsToMemory failed: stepId={}, err={}", stepId, e.toString());

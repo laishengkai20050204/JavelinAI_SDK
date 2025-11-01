@@ -35,9 +35,14 @@ public interface ConversationMemoryMapper {
                       @Param("seq") int seq,
                       @Param("state") String state);
 
-    List<Map<String, Object>> selectContext(@Param("userId") String userId,
-                                            @Param("conversationId") String conversationId,
-                                            @Param("limit") int limit);
+    List<Map<String, Object>> selectFinalContext(@Param("userId") String userId,
+                                                 @Param("conversationId") String conversationId,
+                                                 @Param("limit") int limit);
+
+    List<Map<String, Object>> selectStepIdContext(@Param("userId") String userId,
+                                                 @Param("conversationId") String conversationId,
+                                                 @Param("stepId") String stepId,
+                                                 @Param("limit") int limit);
 
     int promoteDraftsToFinal(@Param("userId") String userId,
                              @Param("conversationId") String conversationId,

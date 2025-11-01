@@ -86,7 +86,7 @@
         message_timestamp = VALUES(message_timestamp)
     </insert>
 
-    <select id="selectContext" resultType="map">
+    <select id="selectFinalContext" resultType="map">
         SELECT id, user_id, conversation_id, role, content, payload, message_timestamp,
         step_id, seq, state, created_at
         FROM conversation_messages
@@ -131,6 +131,19 @@
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
           AND step_id = #{stepId}
+    </select>
+
+    <select id="selectStepIdContext" resultType="map">
+        SELECT
+        role, content, payload, step_id, seq, created_at, state
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+        AND conversation_id = #{conversationId}
+        AND step_id = #{stepId}
+        ORDER BY seq , created_at
+        <if test="limit &gt; 0">
+            LIMIT #{limit}
+        </if>
     </select>
 
 </mapper>

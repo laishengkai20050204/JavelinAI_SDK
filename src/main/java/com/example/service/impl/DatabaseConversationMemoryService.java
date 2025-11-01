@@ -88,9 +88,23 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     }
 
     @Override
+    public List<Map<String, Object>> getContext(String userId, String conversationId, String stepId, int limit) {
+        int safeLimit = Math.max(1, limit);
+        List<Map<String, Object>> rows = mapper.selectStepIdContext(userId, conversationId, stepId, safeLimit);
+        List<Map<String, Object>> messages = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> message = toMessageMap(toEntity(row));
+            if (!message.isEmpty()) {
+                messages.add(message);
+            }
+        }
+        return messages;
+    }
+
+    @Override
     public List<Map<String, Object>> getContext(String userId, String conversationId, int limit) {
         int safeLimit = Math.max(1, limit);
-        List<Map<String, Object>> rows = mapper.selectContext(userId, conversationId, safeLimit);
+        List<Map<String, Object>> rows = mapper.selectFinalContext(userId, conversationId, safeLimit);
         List<Map<String, Object>> messages = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
             Map<String, Object> message = toMessageMap(toEntity(row));

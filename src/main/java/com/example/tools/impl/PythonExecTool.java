@@ -68,7 +68,7 @@ public class PythonExecTool implements AiTool {
     @Override
     public ToolResult execute(Map<String, Object> args) {
         if (!props.isEnabled()) {
-            log.warn("python_exec is disabled by config.");
+            log.error("python_exec is disabled by config.");
             return ToolResult.error(null, name(), "tool is disabled by config");
         }
 
@@ -84,7 +84,7 @@ public class PythonExecTool implements AiTool {
         try {
             String code = asString(args.get("code"));
             if (code == null || code.isBlank()) {
-                log.warn("execute aborted: missing code");
+                log.error("execute aborted: missing code");
                 return ToolResult.error(null, name(), "code is required");
             }
             String stdin = asString(args.get("stdin"));
@@ -111,7 +111,7 @@ public class PythonExecTool implements AiTool {
                 return ToolResult.error(null, name(), "failed to create tmp dir: " + e.getMessage());
             }
 
-            // 写 main.py
+            // �?main.py
             File script = new File(workDir, "main.py");
             try (Writer w = new OutputStreamWriter(new FileOutputStream(script), StandardCharsets.UTF_8)) {
                 w.write(code);
@@ -141,13 +141,13 @@ public class PythonExecTool implements AiTool {
             // pip（可选）
             if (pip != null && !pip.isEmpty()) {
                 if (!props.isAllowPip()) {
-                    log.warn("pip requested but allowPip=false, ignore. requested={}", pip);
+                    log.error("pip requested but allowPip=false, ignore. requested={}", pip);
                 } else {
                     log.info("pip installing: {}", pip);
                     // ⬇️ 改用跨平台的 pip 执行
                     ToolResult pipRes = runOnce(buildPipCmd(workDir, pip), null, workDir, timeoutMs);
                     if (!"SUCCESS".equals(pipRes.status())) {
-                        log.warn("pip failed: {}", pipRes.data());
+                        log.error("pip failed: {}", pipRes.data());
                         return ToolResult.error(null, name(), "pip install failed: " + pipRes.data());
                     } else {
                         log.debug("pip done.");
@@ -165,7 +165,7 @@ public class PythonExecTool implements AiTool {
             long durMs = Duration.ofNanos(System.nanoTime() - t0).toMillis();
             log.info("python_exec finished in {} ms", durMs);
 
-            // ⬇️ ADD: “非零退出码”统一视为 ERROR，避免被去重器当成 SUCCESS 复用
+            // ⬇️ ADD: “非零退出码”统一视为 ERROR，避免被去重器当�?SUCCESS 复用
             Map<String, Object> runMap = asMap(run.data());
             Map<String, Object> inner = asMap(runMap.getOrDefault("payload", runMap));
             Integer ec = asInt(inner.get("exitCode"), null);
@@ -199,7 +199,7 @@ public class PythonExecTool implements AiTool {
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("durationMs", durMs);
-            // ⬇️ 兼容 runOnce 返回结构：可能是 {payload:{...}} 或直接扁平 {...}
+            // ⬇️ 兼容 runOnce 返回结构：可能是 {payload:{...}} 或直接扁�?{...}
             if (!inner.isEmpty()) payload.putAll(inner);
             if (!filesOut.isEmpty()) payload.put("files", filesOut);
 
@@ -212,7 +212,7 @@ public class PythonExecTool implements AiTool {
     }
 
 
-    // ------------------- 进程执行与限流 -------------------
+    // ------------------- 进程执行与限�?-------------------
 
     private ToolResult runOnce(List<String> cmd, String stdin, File workDir, int timeoutMs) {
         ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -242,7 +242,7 @@ public class PythonExecTool implements AiTool {
             if (!finished) {
                 p.destroyForcibly();
                 es.shutdownNow();
-                log.warn("subprocess timeout: {} ms", timeoutMs);
+                log.error("subprocess timeout: {} ms", timeoutMs);
                 return ToolResult.error(null, name(), "timeout after " + timeoutMs + " ms");
             }
 
@@ -263,7 +263,7 @@ public class PythonExecTool implements AiTool {
             if (exit == 0) {
                 log.debug("subprocess exit=0, stdoutLen={}, stderrLen={}", out.length, err.length);
             } else {
-                log.warn("subprocess exit={}, stdoutLen={}, stderrLen={}", exit, out.length, err.length);
+                log.error("subprocess exit={}, stdoutLen={}, stderrLen={}", exit, out.length, err.length);
             }
 
             return ToolResult.success(null, name(), false, res);
@@ -314,7 +314,7 @@ public class PythonExecTool implements AiTool {
         if (ec == 0) {
             log.debug("exit=0, stdoutPreview={}, stderrPreview={}", soPreview, sePreview);
         } else {
-            log.warn("exit={}, stdoutPreview={}, stderrPreview={}", ec, soPreview, sePreview);
+            log.error("exit={}, stdoutPreview={}, stderrPreview={}", ec, soPreview, sePreview);
         }
     }
 
@@ -336,7 +336,7 @@ public class PythonExecTool implements AiTool {
             for (int i = 0; i < d.length; i++) {
                 sb.append(String.format("%02x", d[i]));
             }
-            return sb.substring(0, 16); // 前 16 位做 preview
+            return sb.substring(0, 16); // �?16 位做 preview
         } catch (Exception e) {
             return "na";
         }
@@ -370,7 +370,7 @@ public class PythonExecTool implements AiTool {
     }
 
 
-    // ⬇️ ADD: 解析 python 命令（优先用配置；无配置时：Windows=py -3，*nix=python3）
+    // ⬇️ ADD: 解析 python 命令（优先用配置；无配置时：Windows=py -3�?nix=python3�?
     private List<String> resolvePythonCmdTokens() {
         String raw = props.getPythonCmd(); // e.g. "python", "py -3", "C:\\Python311\\python.exe"
         if (raw == null || raw.isBlank()) {
@@ -395,7 +395,7 @@ public class PythonExecTool implements AiTool {
         return cmd;
     }
 
-    // ⬇️ 小工具方法（若你类里已有同名/功能方法，可忽略）
+    // ⬇️ 小工具方法（若你类里已有同名/功能方法，可忽略�?
     @SuppressWarnings("unchecked")
     private Map<String, Object> asMap(Object o) {
         return (o instanceof Map) ? (Map<String, Object>) o : new LinkedHashMap<>();

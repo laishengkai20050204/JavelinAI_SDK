@@ -46,10 +46,21 @@ public class ContextAssemblerImpl implements ContextAssembler {
             }
         } catch (Exception ignore) {}
 
-        final List<Map<String, Object>> rows =
+        // 1) 历史 FINAL（保留原行为，受 limit 约束）
+        final List<Map<String, Object>> finalRows =
                 (userId != null && conversationId != null)
                         ? memoryService.getContext(userId, conversationId, limit)
                         : List.of();
+
+        final List<Map<String, Object>> stepRows =
+                (st.stepId() != null && !st.stepId().isBlank())
+                        ? memoryService.getContext(userId, conversationId, st.stepId(), limit)
+                        : List.of();
+
+        final List<Map<String, Object>> rows = new ArrayList<>(finalRows);
+        if (!stepRows.isEmpty()) rows.addAll(stepRows);
+
+
 
         // 3) 单趟构造最终 messages（严格按 DB 顺序）
         final String SYSTEM_PROMPT =

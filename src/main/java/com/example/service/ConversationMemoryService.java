@@ -19,6 +19,9 @@ public interface ConversationMemoryService {
 
     List<Map<String, Object>> getContext(String userId, String conversationId, int limit);
 
+    List<Map<String, Object>> getContext(String userId, String conversationId, String stepId, int limit);
+
+
     void promoteDraftsToFinal(String userId, String conversationId, String stepId);
 
     void deleteDraftsOlderThanHours(int hours);
@@ -26,4 +29,6 @@ public interface ConversationMemoryService {
     String findStepIdByToolCallId(String userId, String conversationId, String toolCallId);
 
     Integer findMaxSeq(String userId, String conversationId, String stepId);
+
+
 }

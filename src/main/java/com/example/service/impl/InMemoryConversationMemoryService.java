@@ -127,6 +127,11 @@ public class InMemoryConversationMemoryService implements ConversationMemoryServ
     }
 
     @Override
+    public List<Map<String, Object>> getContext(String userId, String conversationId, String stepId, int limit) {
+        return List.of();
+    }
+
+    @Override
     public void promoteDraftsToFinal(String userId, String conversationId, String stepId) {
         if (!StringUtils.hasText(stepId)) {
             return;

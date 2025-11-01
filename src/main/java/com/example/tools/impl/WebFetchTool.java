@@ -88,6 +88,7 @@ public class WebFetchTool implements AiTool {
         try {
             String rawUrl = str(args.get("url"));
             if (!StringUtils.hasText(rawUrl)) {
+                log.error("[web_fetch] invalid args: url is missing");
                 return ToolResult.error(null, name(), "Missing required parameter: url");
             }
 
@@ -98,9 +99,11 @@ public class WebFetchTool implements AiTool {
             // === 1) 规范�?URL + 基础校验/SSRF 防护 ===
             URI uri = normalizeUrl(rawUrl);
             if (!isAllowedScheme(uri)) {
+                log.error("[web_fetch] invalid scheme url={}", rawUrl);
                 return ToolResult.error(null, name(), "Only http/https are allowed.");
             }
             if (props.isSsrfGuardEnabled() && isPrivateAddress(uri)) {
+                log.error("[web_fetch] ssrf_guard blocked url={}", uri);
                 return ToolResult.error(null, name(), "Target host resolves to a private/loopback address.");
             }
 
@@ -133,9 +136,9 @@ public class WebFetchTool implements AiTool {
                     .blockOptional()
                     .orElse(new Body(MediaType.TEXT_PLAIN, "", 0));
 
-            if (body.status() >= 400) { // <-- 访问器方�?
-                String msg = "HTTP " + body.status() + " " +
-                        Optional.ofNullable(body.contentType()).orElse(MediaType.TEXT_PLAIN);
+            if (body.status() >= 400) { // HTTP error path
+                String msg = "HTTP " + body.status() + " " + Optional.ofNullable(body.contentType()).orElse(MediaType.TEXT_PLAIN);
+                log.error("[web_fetch] http_error status={} ct={} url={}", body.status(), body.contentType(), uri);
                 return ToolResult.error(null, name(), msg);
             }
 
@@ -160,7 +163,7 @@ public class WebFetchTool implements AiTool {
             return ToolResult.success(null, name(), false, data);
 
         } catch (Exception e) {
-            log.warn("[web_fetch] exception", e);
+            log.error("[web_fetch] exception", e);
             return ToolResult.error(null, name(), e.getMessage());
         }
     }
