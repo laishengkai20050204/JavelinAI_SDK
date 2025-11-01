@@ -66,13 +66,11 @@ public class SinglePathChatService {
         if (st.finished() || guardrails.reachedMaxLoops(st)) {
 
             // ★ 先统一转正（覆盖所有无 SERVER 工具的结束路径）
-            promoteDraftsToFinalSafe(st);
+            promoteDraftsToFinalSafe(st); // 只有真终结才转正
 
             // 然后发 finished
             sink.next(StepEvent.finished(st.stepId(), st.loop()));
             sink.complete();
-
-            // 最后清缓存、解绑
 
             // 若有：decisionService.clearStep(st.stepId());
             stepStore.clear(st.stepId());
@@ -285,17 +283,17 @@ public class SinglePathChatService {
                 .flatMap(results ->
                         continuationService.appendToolResultsToMemory(st.stepId(), results)
                                 // ★ 立刻转正：user / tool（以及之前已有的 assistant 草稿）都会变成 FINAL
-                                .then(Mono.fromRunnable(() -> {
-                                    var r = st.req();
-                                    if (r != null) {
-                                        try {
-                                            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
-                                        } catch (Exception e) {
-                                            org.slf4j.LoggerFactory.getLogger(getClass())
-                                                    .warn("[memory] promoteDraftsToFinal (on tools) failed: stepId={}, err={}", st.stepId(), e.toString());
-                                        }
-                                    }
-                                }))
+//                                .then(Mono.fromRunnable(() -> {
+//                                    var r = st.req();
+//                                    if (r != null) {
+//                                        try {
+//                                            memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
+//                                        } catch (Exception e) {
+//                                            org.slf4j.LoggerFactory.getLogger(getClass())
+//                                                    .warn("[memory] promoteDraftsToFinal (on tools) failed: stepId={}, err={}", st.stepId(), e.toString());
+//                                        }
+//                                    }
+//                                }))
                                 // ★ 暂存工具结果，供“下一次 AI-REQ”拼到 messages（见第三步）
                                 .then(Mono.fromRunnable(() -> stepStore.saveToolResults(st.stepId(), results)))
                                 .thenReturn(results)
@@ -446,7 +444,7 @@ public class SinglePathChatService {
                     "user", q, /* payload */ null,
                     st.stepId(), seqUser, "DRAFT"
             );
-            memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
+//            memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
 
             log.debug("[user] drafted & promoted (seq=1), step={}, len={}", st.stepId(), q.length());
         });
