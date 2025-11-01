@@ -54,11 +54,7 @@ public class SpringAiConfig {
             log.info("No function callbacks registered; prompts will run without tool calling unless provided per request");
         }
         ChatClient.Builder builder = ChatClient.builder(chatModel);
-        if (properties.getModel() != null) {
-            builder = builder.defaultOptions(org.springframework.ai.model.function.FunctionCallingOptions.builder()
-                    .model(properties.getModel())
-                    .build());
-        }
+
         return builder.build();
     }
 }

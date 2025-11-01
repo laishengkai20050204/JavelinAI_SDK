@@ -3,6 +3,7 @@ package com.example.service.impl;
 import com.example.ai.SpringAiChatGateway;
 import com.example.api.dto.*;
 import com.example.config.AiProperties;
+import com.example.config.EffectiveProps;
 import com.example.service.ConversationMemoryService;
 import com.example.service.DecisionService;
 import com.example.tools.support.JsonCanonicalizer;
@@ -29,6 +30,7 @@ public class DecisionServiceSpringAi implements DecisionService {
 
     private final SpringAiChatGateway gateway;
     private final AiProperties props;
+    private final EffectiveProps effectiveProps;
     private final ObjectMapper mapper;
     private final ConversationMemoryService memoryService;
     private final Map<String, Set<String>> decisionSeen = new ConcurrentHashMap<>();
@@ -44,7 +46,8 @@ public class DecisionServiceSpringAi implements DecisionService {
                 messages.size(), MsgTrace.lastLine(messages), m2Digest);
 
         Map<String, Object> payload = new HashMap<>();
-        payload.put("model", props.getModel());
+        // Prefer runtime model if provided; fallback handled by EffectiveProps
+        payload.put("model", effectiveProps.model());
         payload.put("messages", messages);
         payload.put("_flattened", true);
 
@@ -58,7 +61,7 @@ public class DecisionServiceSpringAi implements DecisionService {
         payload.put("conversationId", st.req().conversationId());
         payload.put("stepId", st.stepId());
 
-        AiProperties.Mode mode = props.getMode();
+        AiProperties.Mode mode = effectiveProps.mode();
 
         // 3) 调网关 → 解析（带调试块抽取 + tool_calls 回退逻辑）
         return gateway.call(payload, mode)

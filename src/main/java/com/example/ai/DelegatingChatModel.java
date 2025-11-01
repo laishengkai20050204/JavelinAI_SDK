@@ -12,7 +12,7 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.context.annotation.Primary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import reactor.core.publisher.Flux;
 
 /**
@@ -22,7 +22,7 @@ import reactor.core.publisher.Flux;
 @Slf4j
 @RequiredArgsConstructor
 @Component
-@Primary
+@ConditionalOnMissingBean(org.springframework.ai.chat.model.ChatModel.class)
 public class DelegatingChatModel implements ChatModel {
 
     private final ObjectProvider<OpenAiChatModel> openAiProvider;
