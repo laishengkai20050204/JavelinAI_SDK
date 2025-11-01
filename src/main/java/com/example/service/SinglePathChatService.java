@@ -41,7 +41,10 @@ public class SinglePathChatService {
 
     public Flux<StepEvent> run(ChatRequest req) {
         return Flux.create(sink -> {
-            String stepId = "step-" + UUID.randomUUID();
+            String stepId = (req != null && req.resumeStepId() != null && !req.resumeStepId().isBlank())
+                    ? req.resumeStepId()
+                    : "step-" + UUID.randomUUID();
+
             StepState init = StepState.init(req, stepId);
 
             if (req != null) {
@@ -210,6 +213,7 @@ public class SinglePathChatService {
                                                 ev.add(decisionEvent);
                                                 ev.add(StepEvent.step(Map.of(
                                                         "type", "clientCalls",
+                                                        "stepId", st.stepId(),
                                                         "calls", serializeCalls(deferred)
                                                 )));
                                                 return Mono.just(StepTransition.of(withHash.finish(FinishReason.WAIT_CLIENT), ev));
@@ -246,6 +250,7 @@ public class SinglePathChatService {
                                         ev.add(decisionEvent);
                                         ev.add(StepEvent.step(Map.of(
                                                 "type", "clientCalls",
+                                                "stepId", st.stepId(),
                                                 "calls", serializeCalls(deferred)
                                         )));
                                         return Mono.just(StepTransition.of(withHash.finish(FinishReason.WAIT_CLIENT), ev));

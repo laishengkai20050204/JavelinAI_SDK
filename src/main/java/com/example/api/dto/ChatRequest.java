@@ -7,6 +7,7 @@ import java.util.Map;
 public record ChatRequest(
         String userId,
         String conversationId,
+        String resumeStepId,
         String q,
         String toolChoice,                 // "auto" | "none"（本步先不用）
         String responseMode,               // "step-json-ndjson"（本步先不用）

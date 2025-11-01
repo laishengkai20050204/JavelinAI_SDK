@@ -32,6 +32,7 @@
   {
     "userId": "u1",
     "conversationId": "c2",
+    "resumeStepId": "",
     "toolChoice": "auto",
     "responseMode": "step-json-ndjson",
     "clientTools": [
