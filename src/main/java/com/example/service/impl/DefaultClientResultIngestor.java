@@ -64,7 +64,7 @@ public class DefaultClientResultIngestor implements ClientResultIngestor {
             }
 
             // 立刻转正 + 暂存 stepStore（让后续拼装或网关兜底也能看到）
-            memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
+//            memoryService.promoteDraftsToFinal(userId, convId, st.stepId());
             stepStore.saveToolResults(st.stepId(), results);
 
             log.debug("[clientResults] promote DRAFT->FINAL & saved to stepStore, step={}, ids={}",

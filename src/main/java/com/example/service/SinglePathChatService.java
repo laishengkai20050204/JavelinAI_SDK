@@ -59,6 +59,17 @@ public class SinglePathChatService {
     }
 
     private void loop(StepState st, FluxSink<StepEvent> sink, AtomicBoolean cancelled) {
+
+        if (st.isWaitingClient()) {
+            sink.next(StepEvent.step(Map.of(
+                    "type", "status",
+                    "phase", "CLIENT_WAIT",
+                    "stepId", st.stepId()
+            )));
+            sink.complete();
+            return;
+        }
+
         if (cancelled.get()) {
             sink.complete();
             return;
@@ -147,7 +158,8 @@ public class SinglePathChatService {
                                             payload.put("type", "assistant");
                                             payload.put("text", draft);
                                             return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                    .thenReturn(StepTransition.of(withHash.finish(), List.of(StepEvent.step(payload))));
+                                                    .thenReturn(StepTransition.of(withHash.finish(FinishReason.DONE), List.of(StepEvent.step(payload))));
+
                                         }
                                         return continueAnswer(withHash, ctx);
                                     }
@@ -200,7 +212,7 @@ public class SinglePathChatService {
                                                         "type", "clientCalls",
                                                         "calls", serializeCalls(deferred)
                                                 )));
-                                                return Mono.just(StepTransition.of(withHash.finish(), ev));
+                                                return Mono.just(StepTransition.of(withHash.finish(FinishReason.WAIT_CLIENT), ev));
                                             }
 
                                             // 没有 clientCalls，则按草稿/续写兜底
@@ -212,7 +224,7 @@ public class SinglePathChatService {
                                                 payload.put("type", "assistant");
                                                 payload.put("text", draft);
                                                 return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                        .thenReturn(StepTransition.of(withHash.finish(), List.of(
+                                                        .thenReturn(StepTransition.of(withHash.finish(FinishReason.DONE), List.of(
                                                                 decisionEvent,
                                                                 StepEvent.step(payload)
                                                         )));
@@ -236,7 +248,7 @@ public class SinglePathChatService {
                                                 "type", "clientCalls",
                                                 "calls", serializeCalls(deferred)
                                         )));
-                                        return Mono.just(StepTransition.of(withHash.finish(), ev));
+                                        return Mono.just(StepTransition.of(withHash.finish(FinishReason.WAIT_CLIENT), ev));
                                     }
 
                                     // 理论上到不了这里；兜底：草稿/续写
@@ -248,7 +260,7 @@ public class SinglePathChatService {
                                         payload.put("type", "assistant");
                                         payload.put("text", draft);
                                         return continuationService.appendAssistantToMemory(st.stepId(), draft)
-                                                .thenReturn(StepTransition.of(withHash.finish(), List.of(
+                                                .thenReturn(StepTransition.of(withHash.finish(FinishReason.DONE), List.of(
                                                         decisionEvent,
                                                         StepEvent.step(payload)
                                                 )));
@@ -313,7 +325,7 @@ public class SinglePathChatService {
                     if (!deferred.isEmpty()) {
                         ev.add(StepEvent.step(Map.of("type", "clientCalls", "calls", serializeCalls(deferred))));
                         // 关键：结束本轮，等客户端把 clientResults 回传（下一次请求的 preIngest 会吸收它们）
-                        StepState next = st.withPending(List.of()).finish();
+                        StepState next = st.withPending(List.of()).finish(FinishReason.WAIT_CLIENT);
                         return StepTransition.of(next, ev);
                     }
 
@@ -375,7 +387,7 @@ public class SinglePathChatService {
     private Mono<StepTransition> continueAnswer(StepState st, AssembledContext ctx) {
         return continuationService.generateAssistant(ctx)
                 .flatMap(text -> continuationService.appendAssistantToMemory(st.stepId(), text).thenReturn(text))
-                .map(text -> StepTransition.of(st.finish(), List.of(
+                .map(text -> StepTransition.of(st.finish(FinishReason.DONE), List.of(
                         StepEvent.step(Map.of("type", "assistant", "text", text))
                 )));
     }
