@@ -221,7 +221,7 @@ public class ContextAssemblerImpl implements ContextAssembler {
             hash = Fingerprint.sha256((rows == null ? 0 : rows.size()) + ":" + (structured == null ? 0 : structured.size()));
         }
 
-        log.debug("[TRACE M1] assembled modelMessages size={} last={} digest={}",
+        log.trace("[TRACE M1] assembled modelMessages size={} last={} digest={}",
                 modelMessages.size(),
                 MsgTrace.lastLine(modelMessages),
                 MsgTrace.digest(modelMessages));

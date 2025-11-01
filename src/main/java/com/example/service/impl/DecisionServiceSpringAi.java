@@ -40,7 +40,7 @@ public class DecisionServiceSpringAi implements DecisionService {
                 (ctx != null && ctx.modelMessages() != null) ? ctx.modelMessages() : List.of();
 
         String m2Digest = MsgTrace.digest(messages);
-        log.debug("[TRACE M2] before gateway size={} last={} digest={}",
+        log.trace("[TRACE M2] before gateway size={} last={} digest={}",
                 messages.size(), MsgTrace.lastLine(messages), m2Digest);
 
         Map<String, Object> payload = new HashMap<>();
