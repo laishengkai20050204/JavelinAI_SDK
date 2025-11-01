@@ -102,6 +102,11 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     }
 
     @Override
+    public List<Map<String, Object>> getContextUptoStep(String userId, String convId, String stepId, int limit) {
+        return mapper.selectContextUptoStep(userId, convId, stepId, limit);
+    }
+
+    @Override
     public List<Map<String, Object>> getContext(String userId, String conversationId, int limit) {
         int safeLimit = Math.max(1, limit);
         List<Map<String, Object>> rows = mapper.selectFinalContext(userId, conversationId, safeLimit);

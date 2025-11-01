@@ -4,7 +4,6 @@ import com.example.ai.tools.AiToolComponent;
 import com.example.api.dto.ToolResult;
 import com.example.config.PythonToolProperties;
 import com.example.tools.AiTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 
@@ -111,7 +110,7 @@ public class PythonExecTool implements AiTool {
                 return ToolResult.error(null, name(), "failed to create tmp dir: " + e.getMessage());
             }
 
-            // �?main.py
+            // �?main.py
             File script = new File(workDir, "main.py");
             try (Writer w = new OutputStreamWriter(new FileOutputStream(script), StandardCharsets.UTF_8)) {
                 w.write(code);
@@ -165,7 +164,7 @@ public class PythonExecTool implements AiTool {
             long durMs = Duration.ofNanos(System.nanoTime() - t0).toMillis();
             log.info("python_exec finished in {} ms", durMs);
 
-            // ⬇️ ADD: “非零退出码”统一视为 ERROR，避免被去重器当�?SUCCESS 复用
+            // ⬇️ ADD: “非零退出码”统一视为 ERROR，避免被去重器当�?SUCCESS 复用
             Map<String, Object> runMap = asMap(run.data());
             Map<String, Object> inner = asMap(runMap.getOrDefault("payload", runMap));
             Integer ec = asInt(inner.get("exitCode"), null);
@@ -199,7 +198,7 @@ public class PythonExecTool implements AiTool {
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("durationMs", durMs);
-            // ⬇️ 兼容 runOnce 返回结构：可能是 {payload:{...}} 或直接扁�?{...}
+            // ⬇️ 兼容 runOnce 返回结构：可能是 {payload:{...}} 或直接扁�?{...}
             if (!inner.isEmpty()) payload.putAll(inner);
             if (!filesOut.isEmpty()) payload.put("files", filesOut);
 
@@ -212,12 +211,19 @@ public class PythonExecTool implements AiTool {
     }
 
 
-    // ------------------- 进程执行与限�?-------------------
+    // ------------------- 进程执行与限�?-------------------
 
     private ToolResult runOnce(List<String> cmd, String stdin, File workDir, int timeoutMs) {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(workDir);
         pb.redirectErrorStream(false);
+
+        // 🔧 新增：强制 UTF-8（Windows/Linux/macOS 通吃）
+        Map<String, String> env = pb.environment();
+        env.putIfAbsent("PYTHONIOENCODING", "utf-8");
+        env.putIfAbsent("PYTHONUTF8", "1");     // Python 3.7+
+        env.putIfAbsent("LANG", "C.UTF-8");     // *nix 常见
+        env.putIfAbsent("LC_ALL", "C.UTF-8");
 
         try {
             Process p = pb.start();
@@ -287,7 +293,7 @@ public class PythonExecTool implements AiTool {
     }
 
     private static byte[] getFuture(Future<byte[]> f) {
-        try { return f.get(100, TimeUnit.MILLISECONDS); }
+        try { return f.get(5, TimeUnit.SECONDS); }
         catch (Exception ignore) { return new byte[0]; }
     }
 
@@ -336,7 +342,7 @@ public class PythonExecTool implements AiTool {
             for (int i = 0; i < d.length; i++) {
                 sb.append(String.format("%02x", d[i]));
             }
-            return sb.substring(0, 16); // �?16 位做 preview
+            return sb.substring(0, 16); // �?16 位做 preview
         } catch (Exception e) {
             return "na";
         }
@@ -370,7 +376,7 @@ public class PythonExecTool implements AiTool {
     }
 
 
-    // ⬇️ ADD: 解析 python 命令（优先用配置；无配置时：Windows=py -3�?nix=python3�?
+    // ⬇️ ADD: 解析 python 命令（优先用配置；无配置时：Windows=py -3�?nix=python3�?
     private List<String> resolvePythonCmdTokens() {
         String raw = props.getPythonCmd(); // e.g. "python", "py -3", "C:\\Python311\\python.exe"
         if (raw == null || raw.isBlank()) {
@@ -382,12 +388,14 @@ public class PythonExecTool implements AiTool {
 
     private List<String> buildRunCmd(File workDir) {
         List<String> cmd = new ArrayList<>(resolvePythonCmdTokens());
+        cmd.addAll(List.of("-X", "utf8", "-u", "-B"));
         cmd.add("main.py");
         return cmd;
     }
 
     private List<String> buildPipCmd(File workDir, List<String> pkgs) {
         List<String> cmd = new ArrayList<>(resolvePythonCmdTokens());
+        cmd.addAll(List.of("-X", "utf8"));
         cmd.add("-m");
         cmd.add("pip");
         cmd.add("install");
@@ -395,7 +403,7 @@ public class PythonExecTool implements AiTool {
         return cmd;
     }
 
-    // ⬇️ 小工具方法（若你类里已有同名/功能方法，可忽略�?
+    // ⬇️ 小工具方法（若你类里已有同名/功能方法，可忽略�?
     @SuppressWarnings("unchecked")
     private Map<String, Object> asMap(Object o) {
         return (o instanceof Map) ? (Map<String, Object>) o : new LinkedHashMap<>();

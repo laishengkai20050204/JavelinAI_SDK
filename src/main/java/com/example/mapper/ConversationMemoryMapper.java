@@ -58,4 +58,6 @@ public interface ConversationMemoryMapper {
     Integer selectMaxSeq(@Param("userId") String userId,
                          @Param("conversationId") String conversationId,
                          @Param("stepId") String stepId);
+
+    List<Map<String, Object>> selectContextUptoStep(String userId, String convId, String stepId, int limit);
 }

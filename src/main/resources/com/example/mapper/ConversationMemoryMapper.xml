@@ -34,7 +34,8 @@
     </sql>
 
     <select id="selectHistory" resultMap="ConversationMessageMap">
-        SELECT <include refid="baseColumns"/>
+        SELECT
+        <include refid="baseColumns"/>
         FROM conversation_messages
         WHERE user_id = #{userId}
         AND conversation_id = #{conversationId}
@@ -43,13 +44,15 @@
     </select>
 
     <delete id="deleteConversation">
-        DELETE FROM conversation_messages
+        DELETE
+        FROM conversation_messages
         WHERE user_id = #{userId}
           AND conversation_id = #{conversationId}
     </delete>
 
     <select id="selectByContent" resultMap="ConversationMessageMap">
-        SELECT <include refid="baseColumns"/>
+        SELECT
+        <include refid="baseColumns"/>
         FROM conversation_messages
         WHERE user_id = #{userId}
         AND conversation_id = #{conversationId}
@@ -64,11 +67,12 @@
 
 
     <select id="selectLatest" resultMap="ConversationMessageMap">
-        SELECT <include refid="baseColumns"/>
+        SELECT
+        <include refid="baseColumns"/>
         FROM conversation_messages
         WHERE user_id = #{userId}
-          AND conversation_id = #{conversationId}
-          AND state = 'FINAL'
+        AND conversation_id = #{conversationId}
+        AND state = 'FINAL'
         ORDER BY created_at DESC, id DESC
         LIMIT #{limit}
     </select>
@@ -77,13 +81,11 @@
         INSERT INTO conversation_messages
         (user_id, conversation_id, role, content, payload, message_timestamp,
          step_id, seq, state, created_at)
-        VALUES
-        (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp},
-         #{stepId}, #{seq}, #{state}, NOW())
-        ON DUPLICATE KEY UPDATE
-        content = VALUES(content),
-        payload = VALUES(payload),
-        message_timestamp = VALUES(message_timestamp)
+        VALUES (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp},
+                #{stepId}, #{seq}, #{state}, NOW())
+        ON DUPLICATE KEY UPDATE content           = VALUES(content),
+                                payload           = VALUES(payload),
+                                message_timestamp = VALUES(message_timestamp)
     </insert>
 
     <select id="selectFinalContext" resultType="map">
@@ -108,7 +110,8 @@
     </update>
 
     <delete id="deleteDraftsOlderThanHours">
-        DELETE FROM conversation_messages
+        DELETE
+        FROM conversation_messages
         WHERE state = 'DRAFT'
           AND created_at &lt; DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
     </delete>
@@ -145,5 +148,54 @@
             LIMIT #{limit}
         </if>
     </select>
+
+    <select id="selectContextUptoStep" resultType="map">
+        SELECT
+        cm.id,
+        cm.user_id,
+        cm.conversation_id,
+        cm.step_id,
+        cm.role,
+        cm.content,
+        cm.payload,
+        cm.tool_name,
+        cm.tool_args,
+        cm.tool_result,
+        COALESCE(cm.message_timestamp, cm.created_at) AS ts,
+        COALESCE(cm.seq, 0) AS seq,
+        cm.state,
+        cm.created_at
+        FROM conversation_messages cm
+        LEFT JOIN (
+        SELECT MAX(COALESCE(message_timestamp, created_at)) AS boundary_ts
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+        AND conversation_id = #{conversationId}
+        AND step_id = #{stepId}
+        ) b ON 1=1
+        WHERE cm.user_id = #{userId}
+        AND cm.conversation_id = #{conversationId}
+        AND COALESCE(cm.message_timestamp, cm.created_at)
+        <![CDATA[ <= ]]>
+        IFNULL(
+        b.boundary_ts,
+        IFNULL(
+        (SELECT MAX(COALESCE(message_timestamp, created_at))
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+        AND conversation_id = #{conversationId}
+        AND state = 'FINAL'),
+        (SELECT MAX(COALESCE(message_timestamp, created_at))
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+        AND conversation_id = #{ConversationId})
+        )
+        )
+        ORDER BY ts ASC, seq ASC, cm.id ASC
+        <if test="limit != null and limit &gt; 0">
+            LIMIT #{limit}
+        </if>
+    </select>
+
 
 </mapper>

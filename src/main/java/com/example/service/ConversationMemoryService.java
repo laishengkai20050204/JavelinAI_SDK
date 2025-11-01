@@ -21,6 +21,8 @@ public interface ConversationMemoryService {
 
     List<Map<String, Object>> getContext(String userId, String conversationId, String stepId, int limit);
 
+    List<Map<String,Object>> getContextUptoStep(String userId, String convId, String stepId, int limit);
+
 
     void promoteDraftsToFinal(String userId, String conversationId, String stepId);
 

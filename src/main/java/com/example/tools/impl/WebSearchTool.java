@@ -20,18 +20,17 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
- * web_search（Serper.dev�?
- * 参数�?
+ * web_search（Serper.dev�?
+ * 参数�?
  *  - q (string, 必填)
  *  - type (web|news|images) 默认 web
- *  - top_k (int, 默认 5, 最�?10)
+ *  - top_k (int, 默认 5, 最�?10)
  *  - lang -> hl
  *  - country -> gl
  *  - page (int, 默认 1)
- *  - site (string, 可�? 作为 site:domain 前缀拼入 q
+ *  - site (string, 可�? 作为 site:domain 前缀拼入 q
  *  - safe (bool, 默认 true)
  */
 @Slf4j
@@ -83,7 +82,7 @@ public class WebSearchTool implements AiTool {
     @Override
     public ToolResult execute(Map<String, Object> args) {
         try {
-            // === 1) 读取 & 规范化参�?===
+            // === 1) 读取 & 规范化参�?===
             String rawQ = str(args.get("q"));
             if (!StringUtils.hasText(rawQ)) {
                 { log.error("[web_search] invalid args: q is missing"); return ToolResult.error(null, name(), "Missing required parameter: q"); }
@@ -98,7 +97,7 @@ public class WebSearchTool implements AiTool {
 
             String q = buildQuery(rawQ, site);
 
-            // === 2) 指纹（与去重框架对齐�?===
+            // === 2) 指纹（与去重框架对齐�?===
             Map<String, Object> fp = new LinkedHashMap<>();
             fp.put("q", q.toLowerCase().trim());
             fp.put("type", type);
@@ -112,12 +111,12 @@ public class WebSearchTool implements AiTool {
             String canonical = JsonCanonicalizer.canonicalize(
                     mapper,
                     mapper.valueToTree(fp),
-                    java.util.Collections.emptySet()   // �?java.util.Set.of()
+                    java.util.Collections.emptySet()   // �?java.util.Set.of()
             );
             String fingerprint = Fingerprint.sha256(canonical);
             String executedKey = name() + "::" + fingerprint;
 
-            // === 3) 准备 HTTP 客户�?===
+            // === 3) 准备 HTTP 客户�?===
             WebClient.Builder builder = webClientBuilder
                     .clone()
                     .baseUrl(props.getSerper().getBaseUrl())
@@ -127,7 +126,7 @@ public class WebSearchTool implements AiTool {
 
             Duration timeout = props.getSerper().getTimeout();
 
-            // === 4) 选择端点 & 请求体映�?===
+            // === 4) 选择端点 & 请求体映�?===
             String endpoint = switch (type) {
                 case "news" -> "/news";
                 case "images" -> "/images";
@@ -140,7 +139,7 @@ public class WebSearchTool implements AiTool {
             if (StringUtils.hasText(lang)) body.put("hl", lang);
             if (StringUtils.hasText(country)) body.put("gl", country);
             if (page > 1) body.put("page", page);
-            // safe 可按需映射，Serper 若无对应可忽略（保留在你的层面过�?提示�?
+            // safe 可按需映射，Serper 若无对应可忽略（保留在你的层面过�?提示�?
 
             // === 5) 发起调用 ===
             JsonNode json = client.post()
@@ -157,7 +156,7 @@ public class WebSearchTool implements AiTool {
                 { log.error("[web_search] empty response from serper"); return ToolResult.error(null, name(), "Empty response from Serper"); }
             }
 
-            // === 6) 解析响应，标准化�?payload ===
+            // === 6) 解析响应，标准化�?payload ===
             List<Map<String, Object>> payload;
             switch (type) {
                 case "news" -> payload = toNewsPayload(json);
@@ -196,7 +195,7 @@ public class WebSearchTool implements AiTool {
         if (!StringUtils.hasText(s)) return null;
         String x = s.trim().toLowerCase();
         x = x.replaceFirst("^https?://", "");
-        x = x.replaceAll("/.*$", ""); // 只保留域�?
+        x = x.replaceAll("/.*$", ""); // 只保留域�?
         return x;
     }
 
@@ -245,7 +244,7 @@ public class WebSearchTool implements AiTool {
             String title = text(n, "title");
             String url = text(n, "link");
             String snippet = prefer(n, List.of("snippet", "snippetHighlighted", "description"));
-            String publishedAt = text(n, "date"); // 不同账号字段名可能不同，先兜�?
+            String publishedAt = text(n, "date"); // 不同账号字段名可能不同，先兜�?
             if (StringUtils.hasText(url) && StringUtils.hasText(title)) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("title", title);
@@ -265,7 +264,7 @@ public class WebSearchTool implements AiTool {
         List<Map<String, Object>> list = new ArrayList<>();
         for (JsonNode n : arr) {
             String title = text(n, "title");
-            String url = text(n, "imageUrl"); // 常见字段名，若不同请按你的实际响应调�?
+            String url = text(n, "imageUrl"); // 常见字段名，若不同请按你的实际响应调�?
             String thumb = text(n, "thumbnailUrl");
             if (StringUtils.hasText(url)) {
                 Map<String, Object> item = new LinkedHashMap<>();
