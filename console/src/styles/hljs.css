@@ -1,0 +1,7 @@
+@import "highlight.js/styles/github.css" all and (prefers-color-scheme: light);
+@import "highlight.js/styles/github-dark.css" all and (prefers-color-scheme: dark);
+
+/* Let the highlight theme control code background inside prose */
+.prose pre { background: transparent; }
+.prose pre code { background: transparent; }
+
