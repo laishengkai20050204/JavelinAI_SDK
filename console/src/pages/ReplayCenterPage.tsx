@@ -1,19 +1,19 @@
-// src/components/ReplayCenterPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
     Play, Square, Download, Filter, RefreshCw, Languages,
     Clipboard, ClipboardCheck, Binary, MessageSquare, Workflow, Wrench
 } from "lucide-react";
-import { readNdjson } from "../lib/ndjson";
+import { readNdjson } from "../lib/ndjson"; // 若没有该文件，可用文末“内联版本”代替
 
-/* 可选：事件类型，辅助提示 */
+/* ===== 事件类型（可选） ===== */
 type ReplayEvent =
     | { event: "started"; ts?: string; data?: any }
     | { event: "finished"; ts?: string; data?: any }
-    | { event?: string; ts?: string; data: { type: "message"|"decision"|"tool"; [k: string]: any } }
+    | { event?: string; ts?: string; data: { type: "message" | "decision" | "tool"; [k: string]: any } }
     | any;
 
+/** 回放中心（与 AdminConfigConsole 同风格） */
 export default function ReplayCenterPage() {
     // ===== i18n =====
     type Lang = "zh" | "en";
@@ -78,10 +78,7 @@ export default function ReplayCenterPage() {
     const [showTool, setShowTool] = useState(true);
     const [showOther, setShowOther] = useState(true);
 
-    // 卸载时清理未完成的流
-    useEffect(() => {
-        return () => abortRef.current?.abort();
-    }, []);
+    useEffect(() => () => abortRef.current?.abort(), []);
 
     // derived
     const filteredEvents = useMemo(() => {
@@ -102,14 +99,16 @@ export default function ReplayCenterPage() {
 
     async function startReplay() {
         abortRef.current?.abort();
-        const ac = new AbortController(); abortRef.current = ac;
-        setLoading(true); setEvents([]);
+        const ac = new AbortController();
+        abortRef.current = ac;
+        setLoading(true);
+        setEvents([]);
 
+        // 走 Vite 代理/同源路径，避免 CORS
         const qs = new URLSearchParams({ userId, conversationId, limit: String(limit) });
         if (stepId) qs.set("stepId", stepId);
-
-        // ✅ 相对路径（走 Vite 代理）；readNdjson 内部也会强制同源
         const url = `/ai/replay/ndjson?${qs.toString()}`;
+
         try {
             await readNdjson(url, (obj) => setEvents((prev) => [...prev, obj]), ac.signal);
         } catch {
@@ -316,9 +315,9 @@ function Banner({ icon, text, color }: { icon: React.ReactNode; text: string; co
     );
 }
 
-/* ===== 子项：不接收 idx，避免 TS6133/TS2741 来回出现 ===== */
+/* ===== 子项：只接收必需 props，避免 TS6133/TS2741 ===== */
 function EventRow({ e, onCopy, copied, lang }: {
-    e: ReplayEvent; onCopy: ()=>void; copied: boolean; lang: "zh"|"en";
+    e: ReplayEvent; onCopy: () => void; copied: boolean; lang: "zh" | "en";
 }) {
     const type = (e as any)?.data?.type;
     const ts = (e as any)?.ts || "";
@@ -340,13 +339,13 @@ function EventRow({ e, onCopy, copied, lang }: {
     );
 }
 
-/* ===== 文本格式：避免与上面的 i18n 变量 t 冲突，把本地变量命名为 typ ===== */
-/* ===== 文本格式（升级：决策工具漂亮打印 + 自动解码 arguments） ===== */
+/* ===== 文本格式（升级版：把 \n 变成真换行，并美化 tool_calls） ===== */
 function formatEventLine(e: ReplayEvent, lang: "zh"|"en") {
     const typ = (e as any)?.data?.type;
     if (typ === "message") {
         const role = (e as any)?.data?.role ?? "assistant";
-        const text = (e as any)?.data?.text ?? "";
+        const textRaw = (e as any)?.data?.text ?? "";
+        const text = toDisplayMultiline(textRaw);
         return `[${role}] ${text}`;
     }
     if (typ === "decision") {
@@ -358,7 +357,7 @@ function formatEventLine(e: ReplayEvent, lang: "zh"|"en") {
         const name = (e as any)?.data?.name ?? "tool";
         const reused = (e as any)?.data?.reused ? (lang === "zh" ? "复用" : "reused") : (lang === "zh" ? "新执行" : "fresh");
         const exitCode = (e as any)?.data?.data?.exitCode;
-        const text = (e as any)?.data?.text;
+        const text = toDisplayMultiline((e as any)?.data?.text);
         return `🛠 ${name} (${reused})` + (exitCode !== undefined ? ` exit=${exitCode}` : "") + (text ? `\n${text}` : "");
     }
     if ((e as any)?.event === "started")  return (lang === "zh" ? "▶ 开始回放" : "▶ Replay started");
@@ -366,27 +365,39 @@ function formatEventLine(e: ReplayEvent, lang: "zh"|"en") {
     return JSON.stringify(e);
 }
 
-/* ===== Helpers：漂亮打印决策里的 tool_calls ===== */
+/* ===== Helpers：漂亮打印决策里的 tool_calls（含反转义与截断） ===== */
 function prettyToolCalls(calls: any[], lang: "zh" | "en") {
-    return (calls || []).map((c, i) => {
-        const name = c?.function?.name || c?.name || c?.id || 'tool';
+    return (calls || []).map((c: any, i: number) => {
+        const name = c?.function?.name || c?.name || c?.id || "tool";
         const rawArgs = c?.function?.arguments ?? c?.arguments;
-        const parsed = deepTryParseJson(rawArgs);         // 自动 JSON.parse 一次（必要时还能二次）
-        const shown  = summarizeArgsForDisplay(parsed);   // 重要字段截断/提要
+        const parsed = deepTryParseJson(rawArgs);          // 把字符串 JSON 解成对象
+        const shown  = summarizeArgsForDisplay(parsed);    // 重要字段摘要 + 反转义
         const idxStr = `#${i + 1}`;
         const label  = lang === "zh" ? "参数" : "args";
         return `${idxStr} ${name}\n${label}: ${shown}`;
     }).join("\n\n");
 }
 
+/** 把字符串里“字面量 \n / \r\n / \t”转成真实换行与制表符 */
+function toDisplayMultiline(v: any): string {
+    if (typeof v !== "string") return v ?? "";
+    // 尝试用 JSON 反转义一次（对包含 \uXXXX 也有效）
+    try {
+        const unescaped = JSON.parse(`"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
+        return unescaped;
+    } catch {
+        // 兜底：简单替换
+        return v.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    }
+}
+
 /** 尝试把字符串 JSON 解到对象；若本身是对象则原样返回 */
 function deepTryParseJson(v: any) {
-    if (typeof v !== 'string') return v;
+    if (typeof v !== "string") return v;
     try {
         const once = JSON.parse(v);
-        // 再试一次（有些后端会把 JSON 再包一层字符串）
-        if (typeof once === 'string') {
-            try { return JSON.parse(once); } catch { return once; }
+        if (typeof once === "string") {
+            try { return JSON.parse(once); } catch { return toDisplayMultiline(once); }
         }
         return once;
     } catch {
@@ -394,47 +405,60 @@ function deepTryParseJson(v: any) {
     }
 }
 
-/** 美化参数：对超长字符串/代码字段做摘要，避免把整个页面撑满 */
+/** 美化参数：对超长字符串/代码字段做摘要 + 反转义 \n */
 function summarizeArgsForDisplay(args: any) {
     const MAX_STR = 160;   // 展示字符串长度上限
     const MAX_LINES = 12;  // 代码最多展示行数
 
-    // 原样为空/基础类型
-    if (args == null) return 'null';
-    if (typeof args === 'number' || typeof args === 'boolean') return String(args);
+    if (args == null) return "null";
+    if (typeof args === "number" || typeof args === "boolean") return String(args);
 
-    if (typeof args === 'string') {
-        const s = args.length > MAX_STR ? (args.slice(0, MAX_STR) + '…') : args;
-        return JSON.stringify(s);
+    // ✅ 关键1：字符串直接返回“解转义后的真实文本”，不要再 JSON.stringify
+    if (typeof args === "string") {
+        const s0 = toDisplayMultiline(args);
+        return s0.length > MAX_STR ? s0.slice(0, MAX_STR) + "…" : s0;
     }
 
-    // 对象：如果有 code 字段，单独做行数限制的摘要
-    if (typeof args === 'object') {
+    if (typeof args === "object") {
         const clone: any = Array.isArray(args) ? [...args] : { ...args };
-        if (clone.code != null) {
-            const code = String(clone.code);
-            const lines = code.split(/\r?\n/);
-            const head = lines.slice(0, MAX_LINES).join('\n');
-            const more = lines.length > MAX_LINES ? `\n…(${lines.length - MAX_LINES} more lines)` : '';
-            clone.code = head + more;
+
+        // 先把所有 string 字段做一次反转义
+        for (const k of Object.keys(clone)) {
+            const v = clone[k];
+            if (typeof v === "string") clone[k] = toDisplayMultiline(v);
         }
 
-        // 把其余特别长的 string 也裁一下
+        // 针对 code 字段做行数裁剪
+        if (clone.code != null) {
+            const code  = String(clone.code);
+            const lines = code.split(/\r?\n/);
+            const head  = lines.slice(0, MAX_LINES).join("\n");
+            const more  = lines.length > MAX_LINES ? `\n…(${lines.length - MAX_LINES} more lines)` : "";
+            clone.code  = head + more;
+        }
+
+        // 对其它很长的字符串裁剪
         for (const k of Object.keys(clone)) {
-            if (k === 'code') continue;
+            if (k === "code") continue;
             const v = clone[k];
-            if (typeof v === 'string' && v.length > MAX_STR) {
-                clone[k] = v.slice(0, MAX_STR) + '…';
+            if (typeof v === "string" && v.length > MAX_STR) {
+                clone[k] = v.slice(0, MAX_STR) + "…";
             }
         }
-        return JSON.stringify(clone, null, 2);
+
+        // ✅ 关键2：对象为了排版依然 stringify，但立刻用 toDisplayMultiline 把 \n 还原成真换行
+        return toDisplayMultiline(JSON.stringify(clone, null, 2));
     }
 
-    // 兜底
-    try { return JSON.stringify(args, null, 2); } catch { return String(args); }
+    try {
+        return toDisplayMultiline(JSON.stringify(args, null, 2));
+    } catch {
+        return String(args);
+    }
 }
 
 
+/* ===================== utils ===================== */
 function triggerDownload(blob: Blob, filename: string) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -442,3 +466,28 @@ function triggerDownload(blob: Blob, filename: string) {
     a.click();
     URL.revokeObjectURL(a.href);
 }
+
+/* ========== 若你没有 ../lib/ndjson，可改用内联版本（去掉上面的 import） ==========
+async function readNdjson(url: string, onEvent: (obj: any) => void, signal?: AbortSignal) {
+  // 使用相对路径即可通过 Vite 代理 -> 后端，避免 CORS
+  const r = await fetch(url, { headers: { "Accept": "application/x-ndjson" }, signal });
+  if (!r.body) throw new Error("No body");
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try { onEvent(JSON.parse(line)); } catch { /* ignore bad line *-/ }
+    }
+  }
+  const rest = buf.trim();
+  if (rest) { try { onEvent(JSON.parse(rest)); } catch {} }
+}
+*/

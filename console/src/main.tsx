@@ -3,7 +3,9 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import AdminRoot from "./pages/AdminRoot";
 import RuntimeConfigPage from "./pages/RuntimeConfigPage";
-import ReplayCenterPage from "./pages/ReplayCenterPage";
+import ReplayCenterConsole from "./components/ReplayCenterConsole";
+// Highlight.js theme. If this fails to resolve, run `npm i` first.
+import "highlight.js/styles/github.css";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -14,7 +16,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/admin" element={<AdminRoot />}>
                     <Route index element={<Navigate to="/admin/runtime" replace />} />
                     <Route path="runtime" element={<RuntimeConfigPage />} />
-                    <Route path="replay" element={<ReplayCenterPage />} />
+                    <Route path="replay" element={<ReplayCenterConsole />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/admin/runtime" replace />} />
             </Routes>
