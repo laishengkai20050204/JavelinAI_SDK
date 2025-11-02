@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -39,6 +40,7 @@ public class ToolDeduplicator {
     }
 
     /** 成功后入账（带 TTL） */
+    @Transactional
     public void saveSuccess(String userId, String convId, String toolName, String argsHash,
                             JsonNode args, JsonNode result, int ttlSeconds) {
         ToolExecutionRecord rec = new ToolExecutionRecord();

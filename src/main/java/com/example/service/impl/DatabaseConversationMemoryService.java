@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
@@ -77,6 +78,7 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         return toMessageList(latest);
     }
 
+    @Transactional
     @Override
     public void upsertMessage(String userId, String conversationId,
                               String role, String content, String payloadJson,
@@ -167,12 +169,13 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         }
     }
 
-    private void persistMessage(String userId,
-                                String conversationId,
-                                Map<String, Object> message,
-                                String stepId,
-                                int seq,
-                                String state) {
+    @Transactional
+    protected void persistMessage(String userId,
+                                  String conversationId,
+                                  Map<String, Object> message,
+                                  String stepId,
+                                  int seq,
+                                  String state) {
         Map<String, Object> safeMessage = message == null ? Map.of() : new HashMap<>(message);
         String role = asString(safeMessage.get("role"));
         String content = extractContent(safeMessage);
