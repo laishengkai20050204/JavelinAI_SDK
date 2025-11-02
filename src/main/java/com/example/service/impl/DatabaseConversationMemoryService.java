@@ -1,5 +1,7 @@
 package com.example.service.impl;
 
+import com.example.audit.AuditChainService;
+import com.example.audit.AuditHasher;
 import com.example.service.ConversationMemoryService;
 import com.example.service.impl.entity.ConversationMessageEntity;
 import com.example.mapper.ConversationMemoryMapper;
@@ -32,6 +34,7 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
 
     private final ConversationMemoryMapper mapper;
     private final ObjectMapper objectMapper;
+    private final AuditChainService auditChainService;
 
     @Override
     public List<Map<String, Object>> getHistory(String userId, String conversationId) {
@@ -80,6 +83,15 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
                               String stepId, int seq, String state) {
         try {
             mapper.upsertMessage(userId, conversationId, role, content, payloadJson, null, stepId, seq, state);
+
+            LocalDateTime createdAtUtc = mapper.selectCreatedAt(userId, conversationId, stepId, seq);
+            var auditPayload = AuditHasher.buildMessageAuditPayload(
+                    userId, conversationId, stepId,
+                    role, /*name*/ null, content,
+                    createdAtUtc.toString(), seq, /*model*/ null
+            );
+            String canonical = AuditHasher.canonicalize(objectMapper, auditPayload);
+            auditChainService.linkMessageByKeyAt(userId, conversationId, stepId, seq, createdAtUtc, canonical);
         } catch (Exception ex) {
             log.warn("Failed to upsert message userId={} conversationId={} stepId={} role={} seq={}",
                     userId, conversationId, stepId, role, seq, ex);
@@ -174,6 +186,16 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         }
 
         mapper.upsertMessage(userId, conversationId, role, content, payloadJson, timestamp, stepId, seq, state);
+
+        // === 审计 canonical + 链 ===
+        LocalDateTime createdAtUtc = mapper.selectCreatedAt(userId, conversationId, stepId, seq);
+        var auditPayload = AuditHasher.buildMessageAuditPayload(
+                userId, conversationId, stepId,
+                role, /*name*/ null, content,
+                createdAtUtc.atOffset(ZoneOffset.UTC).toString(), seq, /*model*/ null
+        );
+        String canonical = AuditHasher.canonicalize(objectMapper, auditPayload);
+        auditChainService.linkMessageByKeyAt(userId, conversationId, stepId, seq, createdAtUtc, canonical);
     }
 
     private List<Map<String, Object>> toMessageList(List<ConversationMessageEntity> entities) {

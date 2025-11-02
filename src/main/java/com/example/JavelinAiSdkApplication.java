@@ -6,7 +6,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@MapperScan("com.example.mapper")
+@MapperScan(basePackages = {
+        "com.example.mapper",      // 你原有的
+        "com.example.audit"        // 新增：包含 AuditMapper 的包
+})
 @Slf4j
 public class JavelinAiSdkApplication {
 

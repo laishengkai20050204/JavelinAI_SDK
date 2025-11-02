@@ -4,6 +4,7 @@ import com.example.service.impl.entity.ConversationMessageEntity;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -60,4 +61,7 @@ public interface ConversationMemoryMapper {
                          @Param("stepId") String stepId);
 
     List<Map<String, Object>> selectContextUptoStep(String userId, String convId, String stepId, int limit);
+
+
+    LocalDateTime selectCreatedAt(String userId, String conversationId, String stepId, int seq);
 }

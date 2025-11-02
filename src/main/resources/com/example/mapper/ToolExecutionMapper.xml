@@ -25,10 +25,23 @@
         AND tool_name = #{toolName}
         AND args_hash = #{argsHash}
         AND status = 'SUCCESS'
-        AND (expires_at IS NULL OR expires_at > NOW())
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
         ORDER BY created_at DESC
         LIMIT 1
     </select>
+
+    <select id="findLatestCreatedAt" parameterType="map" resultType="java.time.LocalDateTime">
+  <![CDATA[
+        SELECT MAX(created_at)
+        FROM tool_executions
+        WHERE conversation_id = #{convId}
+          AND tool_name = #{toolName}
+          AND args_hash = #{argsHash}
+            /* 如果表里有 user_id，建议再加一条避免跨用户碰撞 */
+          AND user_id = #{userId}
+        ]]>
+</select>
+
 
     <insert id="upsertSuccess">
         INSERT INTO tool_executions

@@ -37,6 +37,7 @@ public class SinglePathChatService {
     private final StepContextStore stepStore;
     private final ClientResultIngestor clientResultIngestor;
     private final Set<String> userDraftSaved = ConcurrentHashMap.newKeySet();
+    private final Set<String> clientBatchIngested = ConcurrentHashMap.newKeySet();
     private final Set<String> userFinalWritten = ConcurrentHashMap.newKeySet();
 
     public Flux<StepEvent> run(ChatRequest req) {
@@ -88,6 +89,10 @@ public class SinglePathChatService {
 
             // 若有：decisionService.clearStep(st.stepId());
             stepStore.clear(st.stepId());
+            userDraftSaved.remove("user:" + st.stepId());// ☆ 清理标记
+            clientBatchIngested.removeIf(k -> k.startsWith(st.stepId() + "::"));
+
+
             return;
         }
 
@@ -110,20 +115,11 @@ public class SinglePathChatService {
             stepStore.bind(st.stepId(), st.req().userId(), st.req().conversationId());
         }
 
-        // === 0) 先落用户问句 → 立即转正 ===
+        // === 0) 先落用户问句  ===
         Mono<Void> preUser = persistUserDraftIfAny(st);
 
         // === 0) 串行吸收客户端结果 ===
-        Mono<Void> preIngest = Mono
-                .defer(() -> {
-                    var r = st.req();
-                    List<Map<String,Object>> cr = (r == null ? null : r.clientResults());
-                    return clientResultIngestor.ingest(st, (cr == null) ? List.of() : cr);
-                })
-                .onErrorResume(ex -> {
-                    log.warn("[clientResults] ingest failed, step={}, err={}", st.stepId(), ex.toString());
-                    return Mono.empty();
-                });
+        Mono<Void> preIngest = ingestClientResultsOnce(st);
 
         return preUser.then(preIngest).then(Mono.defer(() -> {
             // 1) 有挂起的 SERVER 工具先执行
@@ -437,7 +433,9 @@ public class SinglePathChatService {
         var r = st.req();
         if (r == null) return;
         try {
+
             memoryService.promoteDraftsToFinal(r.userId(), r.conversationId(), st.stepId());
+
         } catch (Exception e) {
             log.warn("[memory] promoteDraftsToFinal failed: stepId={}, err={}", st.stepId(), e.toString());
         }
@@ -448,6 +446,12 @@ public class SinglePathChatService {
         if (r == null) return Mono.empty();
         String q = (r.q() == null ? "" : r.q().trim());
         if (q.isEmpty()) return Mono.empty();
+
+        // ☆☆ 幂等：每个 stepId 只允许写一次
+        String onceKey = "user:" + st.stepId();
+        if (!userDraftSaved.add(onceKey)) {
+            return Mono.empty();
+        }
 
         return Mono.fromRunnable(() -> {
             String userId = r.userId();
@@ -466,6 +470,32 @@ public class SinglePathChatService {
             log.debug("[user] drafted & promoted (seq=1), step={}, len={}", st.stepId(), q.length());
         });
     }
+
+    // 封装一下吸收逻辑
+    private Mono<Void> ingestClientResultsOnce(StepState st) {
+        var r = st.req();
+        if (r == null) return Mono.empty();
+        List<Map<String,Object>> cr = (r.clientResults() == null) ? List.of() : r.clientResults();
+        if (cr.isEmpty()) return Mono.empty();
+
+        String raw;
+        try {
+            raw = objectMapper.writeValueAsString(cr);  // 规范化序列化
+        } catch (Exception e) {
+            raw = String.valueOf(cr);
+        }
+        String batchKey = st.stepId() + "::" + com.example.util.Fingerprint.sha256(raw);
+
+        if (!clientBatchIngested.add(batchKey)) {
+            return Mono.empty(); // 本轮已吸收相同批次，跳过
+        }
+        return clientResultIngestor.ingest(st, cr)
+                .onErrorResume(ex -> {
+                    log.warn("[clientResults] ingest failed, step={}, err={}", st.stepId(), ex.toString());
+                    return Mono.empty();
+                });
+    }
+
 
 
 }

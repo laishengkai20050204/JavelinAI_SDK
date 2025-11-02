@@ -1,5 +1,7 @@
 package com.example.tools.support;
 
+import com.example.audit.AuditChainService;
+import com.example.audit.AuditHasher;
 import com.example.mapper.ToolExecutionMapper;
 import com.example.mapper.model.ToolExecutionRecord;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -18,6 +20,7 @@ import java.util.Optional;
 public class ToolDeduplicator {
 
     private final ToolExecutionMapper db;
+    private final AuditChainService auditChainService;
     private final ObjectMapper mapper;
 
     /** 指纹：toolName + '|' + canonicalArgs 的 SHA256 */
@@ -48,6 +51,15 @@ public class ToolDeduplicator {
         rec.setResultJson(result == null ? null : result.toString());
         if (ttlSeconds > 0) rec.setExpiresAt(LocalDateTime.now().plusSeconds(ttlSeconds));
         db.upsertSuccess(rec);
+
+        LocalDateTime createdAt = db.findLatestCreatedAt(userId, convId, toolName, argsHash);
+
+        String dataHash = AuditHasher.computeDataHash(mapper, result);
+        var payload = AuditHasher.buildToolAuditPayload(userId, convId, null, toolName, argsHash, dataHash, false, "SUCCESS", null, null);
+        String canonical = AuditHasher.canonicalize(mapper, payload);
+
+        auditChainService.linkLatestToolByArgsHashAt(userId, convId, toolName, argsHash, createdAt, canonical);
+
         log.debug("Persisted tool success: user={} conv={} tool={} ttl={}s",
                         userId, convId, toolName, ttlSeconds);
 

@@ -82,7 +82,7 @@
         (user_id, conversation_id, role, content, payload, message_timestamp,
          step_id, seq, state, created_at)
         VALUES (#{userId}, #{conversationId}, #{role}, #{content}, #{payload}, #{messageTimestamp},
-                #{stepId}, #{seq}, #{state}, NOW())
+                #{stepId}, #{seq}, #{state}, CURRENT_TIMESTAMP(6))
         ON DUPLICATE KEY UPDATE content           = VALUES(content),
                                 payload           = VALUES(payload),
                                 message_timestamp = VALUES(message_timestamp)
@@ -113,7 +113,7 @@
         DELETE
         FROM conversation_messages
         WHERE state = 'DRAFT'
-          AND created_at &lt; DATE_SUB(NOW(), INTERVAL #{hours} HOUR)
+          AND created_at &lt; DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL #{hours} HOUR)
     </delete>
 
     <select id="selectStepIdByToolCallId" resultType="string">
@@ -196,6 +196,18 @@
             LIMIT #{limit}
         </if>
     </select>
+
+    <select id="selectCreatedAt" parameterType="map" resultType="java.time.LocalDateTime">
+  <![CDATA[
+        SELECT created_at
+        FROM conversation_messages
+        WHERE user_id = #{userId}
+          AND conversation_id = #{conversationId}
+          AND step_id = #{stepId}
+          AND seq = #{seq}
+        LIMIT 1
+        ]]>
+</select>
 
 
 </mapper>
