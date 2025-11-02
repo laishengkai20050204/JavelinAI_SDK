@@ -1,5 +1,6 @@
 // src/components/JsonViewer.tsx
-
+import DOMPurify from "dompurify";
+import hljs from "highlight.js";
 type JVProps = { data: any; label?: string; defaultOpen?: boolean; level?: number };
 
 export function JsonViewer({ data, label, defaultOpen = false, level = 0 }: JVProps) {
@@ -8,9 +9,16 @@ export function JsonViewer({ data, label, defaultOpen = false, level = 0 }: JVPr
 
     if (!isObj) {
         if (typeof data === 'string' && /[\r\n]/.test(data)) {
+            let html = '';
+            try {
+                html = hljs.highlightAuto(data).value;
+            } catch {
+                html = data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+            const safe = DOMPurify.sanitize(html);
             return (
-                <pre className="rounded bg-slate-800/70 p-2 whitespace-pre-wrap text-[12px] text-emerald-200">
-                    {data}
+                <pre className="rounded p-2 whitespace-pre-wrap text-[12px] overflow-x-auto">
+                    <code className="hljs" dangerouslySetInnerHTML={{ __html: safe }} />
                 </pre>
             );
         }

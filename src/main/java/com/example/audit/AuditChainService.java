@@ -6,22 +6,17 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class AuditChainService {
+    private final AuditMapper mapper;
 
-    private final AuditRepo repo;
-
-    /** 为消息行追加 prev/hash/audit_canonical */
-    public AuditHasher.Chain linkAndPersistForMessage(String conversationId, long rowId, String canonical) {
-        String prev = repo.findLastHashByConversation(conversationId);
-        AuditHasher.Chain chain = AuditHasher.link(prev, canonical);
-        repo.updateMessageAudit(rowId, chain.prev(), chain.hash(), chain.canonical());
-        return chain;
+    public void linkMessageByKey(String userId, String convId, String stepId, int seq, String canonical) {
+        String prev = mapper.findLastHashByConversation(convId);
+        var chain = AuditHasher.link(prev, canonical);
+        mapper.updateMessageAuditByKey(userId, convId, stepId, seq, chain.prev(), chain.hash(), chain.canonical());
     }
 
-    /** 为工具执行行追加 prev/hash/audit_canonical */
-    public AuditHasher.Chain linkAndPersistForToolExec(String conversationId, long rowId, String canonical) {
-        String prev = repo.findLastHashByConversation(conversationId);
-        AuditHasher.Chain chain = AuditHasher.link(prev, canonical);
-        repo.updateToolAudit(rowId, chain.prev(), chain.hash(), chain.canonical());
-        return chain;
+    public void linkLatestToolByArgsHash(String convId, String toolName, String argsHash, String canonical) {
+        String prev = mapper.findLastHashByConversation(convId);
+        var chain = AuditHasher.link(prev, canonical);
+        mapper.updateLatestToolAudit(convId, toolName, argsHash, chain.prev(), chain.hash(), chain.canonical());
     }
 }
