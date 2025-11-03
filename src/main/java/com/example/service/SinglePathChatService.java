@@ -135,9 +135,9 @@ public class SinglePathChatService {
                         String toolChoice = (req == null || req.toolChoice() == null) ? "" : req.toolChoice();
 
                         // 2) toolChoice=none → 直接续写并结束
-                        if ("none".equalsIgnoreCase(toolChoice)) {
-                            return continueAnswer(withHash, ctx);
-                        }
+//                        if ("none".equalsIgnoreCase(toolChoice)) {
+//                            return continueAnswer(withHash, ctx);
+//                        }
 
                         // 3) 让模型做决策
                         return decisionService.decide(st, ctx)
