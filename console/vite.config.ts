@@ -12,6 +12,7 @@ export default defineConfig({
     server: {
         port: 5173,
         proxy: {
+            '/audit':    { target: 'http://localhost:8080', changeOrigin: true },
             '/admin': { target: 'http://localhost:8080', changeOrigin: true },
             '/ai':    { target: 'http://localhost:8080', changeOrigin: true },
         },

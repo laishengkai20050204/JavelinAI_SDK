@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.audit.AuditMapper">
+
+    <!-- 同会话跨两表取“上一条” hash -->
+    <select id="findLastHashByConversation" resultType="string">
+        <![CDATA[
+        SELECT h FROM (
+          SELECT hash AS h, created_at AS ts
+          FROM conversation_messages
+          WHERE conversation_id = #{conversationId} AND hash IS NOT NULL
+
+          UNION ALL
+
+          SELECT hash AS h, created_at AS ts
+          FROM tool_executions
+          WHERE conversation_id = #{conversationId} AND hash IS NOT NULL
+        ) t
+        ORDER BY ts DESC
+        LIMIT 1
+        ]]>
+    </select>
+
+    <!-- 用复合键更新消息（假定 userId+convId+stepId+seq 唯一） -->
+    <update id="updateMessageAuditByKey">
+        <![CDATA[
+        UPDATE conversation_messages
+           SET prev_hash = #{prevHash}, hash = #{hash}, audit_canonical = #{canonical}
+         WHERE user_id = #{userId} AND conversation_id = #{conversationId}
+           AND step_id = #{stepId} AND seq = #{seq}
+         LIMIT 1
+        ]]>
+    </update>
+
+    <!-- 更新“该工具该参数”的最新一条执行记录（MySQL 支持 UPDATE...ORDER BY...LIMIT） -->
+    <update id="updateLatestToolAudit">
+        <![CDATA[
+        UPDATE tool_executions
+           SET prev_hash = #{prevHash}, hash = #{hash}, audit_canonical = #{canonical}
+         WHERE conversation_id = #{conversationId} AND tool_name = #{toolName}
+           AND args_hash = #{argsHash}
+         ORDER BY created_at DESC
+         LIMIT 1
+        ]]>
+    </update>
+
+    <!-- 回溯到某个时间点时的上一条 -->
+    <select id="findLastHashByConversationAt" resultType="string">
+        <![CDATA[
+        SELECT h FROM (
+          SELECT hash AS h, created_at AS ts
+          FROM conversation_messages
+          WHERE user_id = #{userId} AND conversation_id = #{conversationId}
+            AND hash IS NOT NULL AND created_at <= #{atTs}
+          UNION ALL
+          SELECT hash AS h, created_at AS ts
+          FROM tool_executions
+          WHERE conversation_id = #{conversationId}
+            AND hash IS NOT NULL AND created_at <= #{atTs}
+        ) t
+        ORDER BY ts DESC
+        LIMIT 1
+        ]]>
+    </select>
+
+    <!-- resources/mappers/AuditMapper.xml 关键片段 -->
+
+    <select id="selectAuditTimeline" parameterType="map" resultType="map">
+  <![CDATA[
+        SELECT
+            cm.id               AS id,
+            cm.created_at       AS created_at,
+            cm.prev_hash        AS prev_hash,
+            cm.hash             AS hash,
+            cm.audit_canonical  AS audit_canonical
+        FROM conversation_messages cm
+        WHERE cm.user_id = #{userId}
+          AND cm.conversation_id = #{conversationId}
+
+        UNION ALL
+
+        SELECT
+            te.id               AS id,
+            te.created_at       AS created_at,
+            te.prev_hash        AS prev_hash,
+            te.hash             AS hash,
+            te.audit_canonical  AS audit_canonical
+        FROM tool_executions te
+        WHERE te.user_id = #{userId}
+          AND te.conversation_id = #{conversationId}
+
+        ORDER BY
+            created_at ASC,
+            id ASC
+        ]]>
+</select>
+
+
+
+
+
+</mapper>
+

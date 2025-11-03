@@ -9,9 +9,9 @@ public record ChatRequest(
         String conversationId,
         String resumeStepId,
         String q,
-        String toolChoice,                 // "auto" | "none"（本步先不用）
-        String responseMode,               // "step-json-ndjson"（本步先不用）
-        List<Map<String, Object>> tool_calls,   // 待执行工具（本步先不用）
-        List<Map<String, Object>> clientTools,  // 客户端工具 schema（本步先不用）
-        List<Map<String, Object>> clientResults // 客户端工具结果（本步先不用）
+        String toolChoice,                 // "auto" | "none"
+        String responseMode,               // "step-json-ndjson"
+        List<Map<String, Object>> tool_calls,   // 待执行工具
+        List<Map<String, Object>> clientTools,  // 客户端工具 schema
+        List<Map<String, Object>> clientResults // 客户端工具结果
 ) {}

@@ -11,6 +11,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/audit")
 @RequiredArgsConstructor
@@ -54,5 +56,19 @@ public class AuditController {
                                    @RequestParam String conversationId,
                                    ServerHttpResponse resp) {
         return exportService.streamNdjson(userId, conversationId, resp);
+    }
+
+    @Operation(summary = "获取尾哈希（tailHash）")
+    @GetMapping(value = "/tail", produces = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> tail(@RequestParam String userId,
+                                          @RequestParam String conversationId) {
+        return Mono.fromCallable(() -> {
+            var rep = verifyService.verify(userId, conversationId);
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("userId", userId);
+            m.put("conversationId", conversationId);
+            m.put("tailHash", rep.tailHash()); // 允许为 null
+            return m;
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 }

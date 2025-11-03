@@ -2,6 +2,7 @@ import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
+const StepOrchestratorPage = React.lazy(() => import("./pages/StepOrchestratorPage")); // ← 新增懒加载
 import "./index.css";
 import "./styles/hljs.css";
 
@@ -9,6 +10,7 @@ import "./styles/hljs.css";
 const AdminRoot = React.lazy(() => import("./pages/AdminRoot"));
 const RuntimeConfigPage = React.lazy(() => import("./pages/RuntimeConfigPage"));
 const ReplayCenterConsole = React.lazy(() => import("./components/ReplayCenterConsole"));
+const AuditConsolePage = React.lazy(() => import("./pages/AuditConsolePage"));
 
 function PageTransition({ children }: { children: React.ReactNode }) {
     const location = useLocation();
@@ -41,6 +43,7 @@ function RouterTree() {
                 }
             >
                 <Route index element={<Navigate to="/admin/runtime" replace />} />
+
                 <Route
                     path="runtime"
                     element={
@@ -51,6 +54,7 @@ function RouterTree() {
                         </PageTransition>
                     }
                 />
+
                 <Route
                     path="replay"
                     element={
@@ -61,7 +65,31 @@ function RouterTree() {
                         </PageTransition>
                     }
                 />
+
+                <Route
+                    path="audit"
+                    element={
+                        <PageTransition>
+                            <Suspense fallback={<div className="p-8 text-sm opacity-70">Loading audit…</div>}>
+                                <AuditConsolePage />
+                            </Suspense>
+                        </PageTransition>
+                    }
+                />
+
+                {/* 新增：Orchestrator（M3） */}
+                <Route
+                    path="orchestrator"
+                    element={
+                        <PageTransition>
+                            <Suspense fallback={<div className="p-8 text-sm opacity-70">Loading orchestrator…</div>}>
+                                <StepOrchestratorPage />
+                            </Suspense>
+                        </PageTransition>
+                    }
+                />
             </Route>
+
             <Route path="*" element={<Navigate to="/admin/runtime" replace />} />
         </Routes>
     );
