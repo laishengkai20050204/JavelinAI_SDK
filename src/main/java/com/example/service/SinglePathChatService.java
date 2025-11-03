@@ -74,10 +74,7 @@ public class SinglePathChatService {
             return;
         }
 
-        if (cancelled.get()) {
-            sink.complete();
-            return;
-        }
+
         if (st.finished() || guardrails.reachedMaxLoops(st)) {
 
             // ★ 先统一转正（覆盖所有无 SERVER 工具的结束路径）
@@ -92,7 +89,11 @@ public class SinglePathChatService {
             userDraftSaved.remove("user:" + st.stepId());// ☆ 清理标记
             clientBatchIngested.removeIf(k -> k.startsWith(st.stepId() + "::"));
 
+            return;
+        }
 
+        if (cancelled.get()) {
+            sink.complete();
             return;
         }
 

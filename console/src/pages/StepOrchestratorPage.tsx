@@ -4,6 +4,7 @@ import {
     Play, Square, Send, RefreshCcw, ListChecks, MessagesSquare, AlertTriangle,
     CheckCircle2, Languages, Rocket, Plus, Trash2, Wrench
 } from "lucide-react";
+import { useSharedIds } from "../lib/sharedIds";
 
 /**
  * StepOrchestratorPage (M3)
@@ -85,8 +86,7 @@ export default function StepOrchestratorPage() {
     );
     const t = I18N[lang];
 
-    const [userId, setUserId] = React.useState("");
-    const [conversationId, setConversationId] = React.useState("");
+    const { userId, setUserId, conversationId, setConversationId } = useSharedIds("", "");
     const [prompt, setPrompt] = React.useState("");
 
     const [startKick, setStartKick] = React.useState(0);

@@ -40,6 +40,8 @@ const I18N = {
       diffOpen: "查看待提交 Diff",
       diffClose: "收起 Diff",
       willSubmit: "将提交",
+      effectiveOpen: "查看生效配置",
+      effectiveClose: "收起生效配置",
     },
     banners: {
       loading: "正在加载配置",
@@ -88,6 +90,8 @@ const I18N = {
       diffOpen: "Show Pending Diff",
       diffClose: "Hide Diff",
       willSubmit: "Will submit",
+      effectiveOpen: "Show Effective",
+      effectiveClose: "Hide Effective",
     },
     banners: {
       loading: "Loading configuration",
@@ -150,6 +154,7 @@ export default function AdminConfigConsole() {
   const [streamTimeoutMs, setStreamTimeoutMs] = useState<number | "">("");
   const [toolToggles, setToolToggles] = useState<Record<string, boolean>>({});
   const [showDiff, setShowDiff] = useState<boolean>(false);
+  const [showEffectiveSnap, setShowEffectiveSnap] = useState<boolean>(false);
 
   const load = async () => {
     setLoading(true);
@@ -328,28 +333,50 @@ export default function AdminConfigConsole() {
         </div>
 
         {/* Snapshots */}
-        {effective && (
-          <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mb-6 grid gap-4 md:grid-cols-2">
-            <Card title={t.sections.snapshots.effective}>
-              <Snap k="compatibility" v={effective.compatibility} />
-              <Snap k="model" v={effective.model} />
-              <Snap k="toolsMaxLoops" v={String(effective.toolsMaxLoops)} />
-              <Snap k="clientTimeoutMs" v={String(effective.clientTimeoutMs ?? "-")} />
-              <Snap k="streamTimeoutMs" v={String(effective.streamTimeoutMs ?? "-")} />
-              <Snap k="baseUrl" v={effective.baseUrl ?? "-"} />
-              <Snap k="apiKeyMasked" v={effective.apiKeyMasked ?? "-"} />
-            </Card>
-            <Card title={t.sections.snapshots.runtime}>
-              <Snap k="compatibility" v={runtime?.compatibility ?? "-"} />
-              <Snap k="model" v={runtime?.model ?? "-"} />
-              <Snap k="toolsMaxLoops" v={String(runtime?.toolsMaxLoops ?? "-")} />
-              <Snap k="baseUrl" v={runtime?.baseUrl ?? "-"} />
-              <Snap k="apiKeyMasked" v={runtime?.apiKeyMasked ?? "-"} />
-              <Snap k="clientTimeoutMs" v={String(runtime?.clientTimeoutMs ?? "-")} />
-              <Snap k="streamTimeoutMs" v={String(runtime?.streamTimeoutMs ?? "-")} />
-            </Card>
-          </motion.div>
-        )}
+          {effective && (
+            <>
+              <div className="mb-2 flex justify-end">
+                <button
+                  onClick={() => setShowEffectiveSnap((v) => !v)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                >
+                  {showEffectiveSnap ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showEffectiveSnap ? t.actions.effectiveClose : t.actions.effectiveOpen}
+                </button>
+              </div>
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 grid gap-4 md:grid-cols-1"
+              >
+                {showEffectiveSnap ? (
+                  <Card title={t.sections.snapshots.effective}>
+                    <Snap k="compatibility" v={effective.compatibility} />
+                    <Snap k="model" v={effective.model} />
+                    <div className="md:col-span-2">
+                      <Snap k="baseUrl" v={effective.baseUrl ?? "-"} />
+                    </div>
+                    <Snap k="apiKeyMasked" v={effective.apiKeyMasked ?? "-"} />
+                    <Snap k="toolsMaxLoops" v={String(effective.toolsMaxLoops)} />
+                    <Snap k="clientTimeoutMs" v={String(effective.clientTimeoutMs ?? "-")} />
+                    <Snap k="streamTimeoutMs" v={String(effective.streamTimeoutMs ?? "-")} />
+                  </Card>
+                ) : (
+                  <Card title={t.sections.snapshots.runtime}>
+                    <Snap k="compatibility" v={runtime?.compatibility ?? "-"} />
+                    <Snap k="model" v={runtime?.model ?? "-"} />
+                    <div className="md:col-span-2">
+                      <Snap k="baseUrl" v={runtime?.baseUrl ?? "-"} />
+                    </div>
+                    <Snap k="apiKeyMasked" v={runtime?.apiKeyMasked ?? "-"} />
+                    <Snap k="toolsMaxLoops" v={String(runtime?.toolsMaxLoops ?? "-")} />
+                    <Snap k="clientTimeoutMs" v={String(runtime?.clientTimeoutMs ?? "-")} />
+                    <Snap k="streamTimeoutMs" v={String(runtime?.streamTimeoutMs ?? "-")} />
+                  </Card>
+                )}
+              </motion.div>
+            </>
+          )}
 
         {/* Form */}
         <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -486,7 +513,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   return (
     <div className="rounded-2xl border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="mb-3 text-sm font-medium text-slate-700 dark:text-slate-200">{title}</div>
-      <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">{children}</div>
+      <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">{children}</div>
     </div>
   );
 }

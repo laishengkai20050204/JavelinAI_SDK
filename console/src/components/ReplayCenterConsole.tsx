@@ -10,6 +10,7 @@ import { markdownToSafeHtml } from "../lib/markdown";
 import { JsonViewer } from "../components/JsonViewer";
 import { TypeBadge } from "../components/TypeBadge";
 import { buildReplayCurl } from "../lib/curl";
+import { useSharedIds } from "../lib/sharedIds";
 
 /* ===== 类型（与原来一致） ===== */
 type ReplayEvent =
@@ -60,8 +61,7 @@ export default function ReplayCenterPage() {
     const t = i18n[lang];
 
     // ===== state =====
-    const [userId, setUserId] = useState("u1");
-    const [conversationId, setConversationId] = useState("c1");
+    const { userId, setUserId, conversationId, setConversationId } = useSharedIds("u1", "c1");
     const [stepId, setStepId] = useState<string>("");
     const [limit, setLimit] = useState<number>(1000);
 

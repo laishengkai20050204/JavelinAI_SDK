@@ -4,6 +4,7 @@ import {
     ShieldCheck, ShieldAlert, RefreshCcw, Languages, Link as LinkIcon,
     FileText, FileJson2, Download, Clipboard, ClipboardCheck, Table, Wand2
 } from "lucide-react";
+import { useSharedIds } from "../lib/sharedIds";
 
 type Lang = "zh" | "en";
 
@@ -118,8 +119,7 @@ export default function AuditConsolePage() {
     );
     const t = I18N[lang];
 
-    const [userId, setUserId] = useState<string>("");
-    const [conversationId, setConversationId] = useState<string>("");
+    const { userId, setUserId, conversationId, setConversationId } = useSharedIds("", "");
 
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -333,7 +333,7 @@ export default function AuditConsolePage() {
 
                 {/* Summary */}
                 {report && (
-                    <div className="mb-6 grid gap-4 md:grid-cols-2">
+                    <div className="mb-6 grid gap-4 md:grid-cols-1">
                         <Card title="Summary">
                             <Snap k="userId" v={report.userId} />
                             <Snap k="conversationId" v={report.conversationId} />
