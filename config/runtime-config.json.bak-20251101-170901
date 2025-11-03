@@ -1,0 +1,17 @@
+{
+  "compatibility" : "OPENAI",
+  "model" : "kimi-k2-turbo-preview",
+  "toolsMaxLoops" : 10,
+  "toolToggles" : {
+    "debug_tool" : false,
+    "find_relevant_memory" : false,
+    "get_server_time" : false,
+    "python_exec" : false,
+    "web_fetch" : false,
+    "web_search" : false
+  },
+  "baseUrl" : "https://api.moonshot.cn",
+  "apiKey" : "sk-OM8bu4hDbcXVwVHceeQHc4nLBQlbQTrZDZWQCtdDCbT9hckt",
+  "clientTimeoutMs" : 180000,
+  "streamTimeoutMs" : 240000
+}

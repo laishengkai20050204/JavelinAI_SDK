@@ -1,0 +1,12 @@
+{
+  "compatibility" : "OPENAI",
+  "model" : "qwen3:8b",
+  "toolsMaxLoops" : 10,
+  "toolToggles" : {
+    "debug_tool" : false
+  },
+  "baseUrl" : "http://localhost:11434",
+  "apiKey" : null,
+  "clientTimeoutMs" : 180000,
+  "streamTimeoutMs" : 240000
+}
